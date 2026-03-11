@@ -4,6 +4,302 @@
   For interview preparation and professor Q&A
 ================================================================================
 
+╔══════════════════════════════════════════════════════════════════════════════╗
+║           *** 8-HOUR EMERGENCY SCHEDULE — START HERE ***                   ║
+║  You only have 8 hours. Follow this schedule exactly. Skip nothing marked  ║
+║  CRITICAL. Items marked OPTIONAL only if time permits.                     ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOUR 1  (0:00–1:00) — THE BIG PICTURE + DB SCHEMA                        │
+│  Sections to read: 0 and 1                                                 │
+│  Goal: understand what the app IS and draw the DB on paper                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  WHAT TO DO:                                                                │
+│  1. Read Section 0 (project overview, two-project architecture) — 10 min   │
+│  2. Read Section 1 (DB structure) in full — 30 min                        │
+│  3. On paper, draw this entity diagram (memorise relationships):           │
+│                                                                             │
+│     Users ──< CompanyMembers >── Companies ──< Opportunities              │
+│       │                                           │                        │
+│       └──< JobApplications >─────────────────────┘                        │
+│               │                                                             │
+│               └──< InterviewRounds                                         │
+│     Users ──< Sessions                                                     │
+│     Users ──< Connections >── Users  (self-join)                          │
+│     Users ──< Notifications                                                │
+│     Users ──< ChatUsers >── Chat ──< ChatMessages                         │
+│     Users ──< ProfileEducations                                            │
+│     Users ──< ProfileExperiences                                           │
+│     Users ──< UserSkills >── Skills                                        │
+│                                                                             │
+│  4. Write these key enum values on paper (they WILL be asked):            │
+│     Role:           0=Admin  1=User(jobseeker)  2=Employer                │
+│     Status(App):    0=Applied 1=Review 2=Interview 3=Offer 4=Hired 5=Rej  │
+│     SubscriptionPlan: 0=Free  1=Pro  2=Enterprise                         │
+│     Visibility(Post):  0=Public  1=Connections  2=Private                 │
+│     EmploymentType:    0=FullTime 1=PartTime 2=Contract 3=Internship      │
+│     Connection.Status: 0=Pending  1=Accepted                              │
+│                                                                             │
+│  WRITE THESE DOWN. Put the paper in front of you for the rest of study.   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOUR 2  (1:00–2:00) — AUTHENTICATION (most likely to be asked)            │
+│  Sections to read: 3 and 4                                                 │
+│  File: APIPSI16/Controllers/AuthController.cs                              │
+│        APIPSI16/Services/TokenService.cs                                   │
+│        APIPSI16/Services/SessionService.cs                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  WHAT TO DO:                                                                │
+│  1. Open AuthController.cs. Read Login() method line by line (30 min).    │
+│     Write the 7-step login flow in your own words:                        │
+│       1. Normalize username to lowercase                                   │
+│       2. Find user by email OR username in DB                              │
+│       3. VerifyHashedPassword → Failed / Success / SuccessRehashNeeded    │
+│       4. Invalidate all previous active sessions (Sessions table)         │
+│       5. Build Claims[] (Name, NameIdentifier=userId, Role)               │
+│       6. TokenService.CreateToken() → JWT string                          │
+│       7. SessionService.CreateSessionAsync() → INSERT Sessions row        │
+│       8. Return { token, expiresAt }                                       │
+│  2. Read TokenService.cs (10 min) — focus on:                             │
+│       - Convert.FromBase64String(keyBase64) → SymmetricSecurityKey        │
+│       - JwtSecurityToken(issuer, audience, claims, expires, creds)        │
+│       - JwtSecurityTokenHandler().WriteToken(token)                       │
+│  3. Read SessionService.cs (10 min) — focus on:                           │
+│       - CreateSessionAsync: invalidates old sessions FIRST, then inserts  │
+│       - IsSessionValidAsync: checks IsActive=true AND ExpiresAt > now     │
+│       - InvalidateSessionAsync: sets IsActive=false (for logout)          │
+│  4. Read Register() in AuthController — note the role-forcing logic:      │
+│       If caller is NOT admin (role != "0") → force role to 1 (User)       │
+│                                                                             │
+│  QUESTIONS TO ANSWER OUT LOUD BEFORE MOVING ON:                           │
+│   • What is a JWT? What 3 parts? (Header.Payload.Signature)               │
+│   • Why is there a Sessions TABLE if JWTs are already signed?             │
+│   • What does SuccessRehashNeeded mean?                                    │
+│   • What is PBKDF2? What is a salt?                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOUR 3  (2:00–3:00) — PROGRAM.CS + DI CONTAINER                          │
+│  Section to read: 2                                                        │
+│  File: APIPSI16/Program.cs                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  WHAT TO DO:                                                                │
+│  1. Open Program.cs. Read top-to-bottom (30 min). Write:                  │
+│     builder.Services.AddSingleton<ITokenService, TokenService>()          │
+│       → ONE instance for app lifetime                                      │
+│     builder.Services.AddScoped<ISessionService, SessionService>()         │
+│       → ONE per HTTP request (needs DbContext so must be Scoped)           │
+│     builder.Services.AddDbContext<...>()                                  │
+│       → SCOPED by default — never inject into Singleton!                  │
+│                                                                             │
+│  2. Write the JWT validation parameters from memory:                      │
+│     ValidateIssuerSigningKey = true                                        │
+│     ValidateIssuer = true                                                  │
+│     ValidateAudience = true                                                │
+│     ValidateLifetime = true                                                │
+│     ClockSkew = TimeSpan.FromSeconds(30)                                  │
+│                                                                             │
+│  3. Write the middleware pipeline ORDER (order matters for exam!):        │
+│     UseHttpsRedirection → UseStaticFiles → UseCors →                      │
+│     UseAuthentication → UseAuthorization → MapControllers                 │
+│     (Authentication BEFORE Authorization — always)                        │
+│                                                                             │
+│  4. Read the startup diagnostics block — ctx.Database.Migrate() and the   │
+│     raw SQL safety-net for EmployerCandidateHistory columns.              │
+│                                                                             │
+│  QUESTIONS TO ANSWER OUT LOUD:                                             │
+│   • Singleton vs Scoped vs Transient — give one example of each           │
+│   • Why is the JWT key stored as Base64?                                   │
+│   • What happens if UseAuthentication comes AFTER UseAuthorization?       │
+│   • What does ctx.Database.Migrate() do at startup?                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOUR 4  (3:00–4:00) — JOB APPLICATIONS + OPPORTUNITIES                   │
+│  Sections to read: 5 and 6                                                 │
+│  Files: APIPSI16/Controllers/JobApplicationsController.cs                 │
+│         APIPSI16/Controllers/OpportunitiesController.cs                   │
+│         APIPSI16/Services/MatchScoreHelper.cs                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  WHAT TO DO:                                                                │
+│  1. Read JobApplicationsController.Apply() (20 min). Write:               │
+│     Step 1: duplicate check → 409 Conflict                                │
+│     Step 2: Free plan limit (5/month) → 429 Too Many Requests            │
+│     Step 3: new JobApplication { ... } + SaveChangesAsync()              │
+│     Step 4: best-effort notification (try/catch, won't roll back)         │
+│     The [Column("LinkedInUrl")] attribute maps ProfessionalUrl → DB col   │
+│                                                                             │
+│  2. Read ApplyDto — note validation annotations:                          │
+│     [Url] on ProfessionalUrl and PortfolioUrl                             │
+│     [MaxLength(300)]                                                       │
+│     bool? OpenToRemote (checkbox issue — must use type="checkbox")        │
+│                                                                             │
+│  3. Read MatchScoreHelper.cs (20 min). Write the formulas:               │
+│     RoleScore = 2 * matchCount / (userPrefCount + requiredRoleCount) * 100│
+│       (this is the F1 score — harmonic mean of precision + recall)        │
+│     LocationScore = 100 exact / 65 small-country same-region /            │
+│                     35 small-country diff-region / 50 large same-region / │
+│                     0 diff-country  /  -1 no data                         │
+│     WeightedScore = roleScore*0.7 + locationScore*0.3                     │
+│                                                                             │
+│  QUESTIONS TO ANSWER OUT LOUD:                                             │
+│   • What status code for applying twice to same job?                      │
+│   • What is the F1 score and WHY use it instead of just recall?           │
+│   • What is "best-effort" notification? Why not roll back on failure?     │
+│   • What happens when a user has no location data in their profile?       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOUR 5  (4:00–5:00) — SIGNALR CHAT + CONNECTIONS                         │
+│  Sections to read: 9 and 8                                                 │
+│  Files: APIPSI16/Hubs/ChatHub.cs                                          │
+│         APIPSI16/Controllers/ConnectionsController.cs                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  WHAT TO DO:                                                                │
+│  1. Read ChatHub.cs completely (25 min). Write:                           │
+│     - _userConnections: static ConcurrentDictionary<int, HashSet<string>> │
+│       KEY = userId  VALUE = set of SignalR connectionIds (multiple tabs)  │
+│     - OnConnectedAsync: adds to dict, joins "user_{id}" group,            │
+│       joins all "chat_{id}" groups, broadcasts UserOnline=true            │
+│     - OnDisconnectedAsync: removes from dict, if last tab →               │
+│       broadcasts UserOnline=false                                          │
+│     - SendMessage: checks participant → saves to DB → Clients.Group()    │
+│     - MarkMessageAsRead: sets ReadAt → notifies sender via user group     │
+│     - TypingIndicator: Clients.OthersInGroup() (excludes caller)         │
+│                                                                             │
+│  2. Read ConnectionsController.cs (15 min). Write:                       │
+│     POST /request  → check self, check duplicate, check 50-limit,        │
+│                       INSERT Connection (Status=0), INSERT Notification   │
+│     POST /{id}/accept → Status=1, AcceptedAt=now, send notification back  │
+│     GET /my-with-users → single .Join() query, avoids N+1               │
+│     GET /pending → Status=0 where AddresseeUserId==me                    │
+│                                                                             │
+│  QUESTIONS TO ANSWER OUT LOUD:                                             │
+│   • What is SignalR? How does it differ from HTTP?                        │
+│   • Why is _userConnections static?                                        │
+│   • What is a SignalR Group and how do you broadcast to one?              │
+│   • What is an N+1 query problem? How does .Join() fix it?               │
+│   • How does the UNIQUE INDEX on Connections prevent race conditions?     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOUR 6  (5:00–6:00) — MVC FRONTEND + SECURITY                            │
+│  Sections to read: 11, 17, and 18                                          │
+│  Files: XcelerateLinks/Controllers/AccountController.cs                   │
+│         XcelerateLinks/Controllers/ApiControllerBase.cs                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  WHAT TO DO:                                                                │
+│  1. Read AccountController.Login (POST) (20 min). Write the 6 steps:     │
+│     1. POST to /api/auth/login → get JWT                                  │
+│     2. JwtSecurityTokenHandler().ReadJwtToken() — parses WITHOUT verify   │
+│     3. SessionService.CreateSessionAsync() on MVC side too               │
+│     4. Response.Cookies.Append(CookieName, token, HttpOnly+Secure)        │
+│     5. HttpContext.SignInAsync() with cookie claims identity              │
+│     6. LocalRedirect(returnUrl) — NOT Redirect() — prevents open redirect │
+│                                                                             │
+│  2. Read ForgotPassword flow (10 min):                                    │
+│     - GeneratePasswordResetToken → in-memory token with expiry            │
+│     - Same message shown whether email exists or not → prevents           │
+│       EMAIL ENUMERATION attack                                             │
+│     - ResetPassword calls /api/auth/reset-password                        │
+│                                                                             │
+│  3. Write the security checklist from Section 18 (15 min):               │
+│     ✓ JWT Bearer on API                                                   │
+│     ✓ HttpOnly cookie on MVC (JS can't steal the token → XSS mitigation) │
+│     ✓ Session table (server-side revocation on logout)                    │
+│     ✓ [ValidateAntiForgeryToken] on all POST actions → CSRF prevention   │
+│     ✓ LocalRedirect() → Open Redirect prevention                         │
+│     ✓ Email enumeration prevention in ForgotPassword                     │
+│     ✓ Resource-level checks: if (app.UserId != currentUserId) Forbid()   │
+│     ✓ Role-level: [Authorize(Roles = "0")] / [Authorize(Roles = "0,2")]  │
+│     ✓ Input validation: [Required][EmailAddress][MinLength][Url][Regex]   │
+│     ✓ File upload: extension whitelist + 5 MB limit                       │
+│                                                                             │
+│  QUESTIONS TO ANSWER OUT LOUD:                                             │
+│   • What is CSRF? How does the anti-forgery token stop it?                │
+│   • What is XSS? How does HttpOnly cookie help?                           │
+│   • What is an Open Redirect attack? How does LocalRedirect() stop it?   │
+│   • Why does the MVC Login parse the JWT without verifying the signature? │
+│   • What is [Authorize(Roles="0,2")]?                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOUR 7  (6:00–7:00) — EF CORE DEEP DIVE + COMPANIES + PROFILES           │
+│  Sections to read: 7, 13, 14 (skim), and the EF section in 1             │
+│  Files: APIPSI16/Controllers/CompaniesControllers.cs                      │
+│         APIPSI16/Data/xcleratesystemslinks_SampleDBContext.cs             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  WHAT TO DO:                                                                │
+│  1. Write these EF Core operations from memory (15 min):                  │
+│     .Include(x => x.Nav)     → eager load (SQL JOIN)                     │
+│     .AnyAsync(predicate)     → EXISTS check                               │
+│     .FindAsync(id)           → find by PK (uses cache first)             │
+│     .AddAsync(entity)        → marks as Added                             │
+│     .Remove(entity)          → marks as Deleted                          │
+│     .Update(entity)          → marks as Modified                         │
+│     EntityState.Modified     → marks ALL columns as dirty → UPDATE *     │
+│     .SaveChangesAsync()      → flushes all tracked changes in one tx     │
+│     .ExecuteUpdateAsync()    → bulk UPDATE without loading entities      │
+│     DbUpdateConcurrencyException → row changed/deleted between GET+PUT   │
+│                                                                             │
+│  2. Read CompaniesController (20 min). Write:                             │
+│     - [Authorize(Roles="0,2")] — two-role guard                          │
+│     - InviteMember: API role check (must be "2") PLUS CompanyMember.Role  │
+│       check (must be >= 3 = CompanyAdmin) — two-level authorization      │
+│     - UpdateCompany: EntityState.Modified + DbUpdateConcurrencyException  │
+│     - GetCompanyProfile: projection with Select() — avoids over-fetching  │
+│                                                                             │
+│  3. Read InterviewRoundsController (10 min):                              │
+│     - Creates InterviewRound row linked to JobApplicationId               │
+│     - Fetches app.UserId to notify the applicant                         │
+│     - Notification Payload = JSON string with scheduledAt in ISO 8601    │
+│                                                                             │
+│  QUESTIONS TO ANSWER OUT LOUD:                                             │
+│   • Difference between .Update() and EntityState.Modified?               │
+│   • When does DbUpdateConcurrencyException happen? How is it handled?    │
+│   • What is eager loading vs lazy loading? Which does this project use?  │
+│   • What does Select() projection do to the SQL query?                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  HOUR 8  (7:00–8:00) — RAPID-FIRE QUESTION PRACTICE                       │
+│  Use: Section 20 (all 40 questions)                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  WHAT TO DO:                                                                │
+│  1. Cover the answers below. Read each question. Say answer OUT LOUD.     │
+│     If you blank, check Section 20. Do NOT just read — SPEAK the answer.  │
+│  2. After going through all 40, revisit only the ones you got wrong.     │
+│  3. Final 15 min: re-read your handwritten notes from Hours 1–7.         │
+│                                                                             │
+│  TOP 10 MOST LIKELY PROFESSOR QUESTIONS (answer these perfectly):        │
+│  ────────────────────────────────────────────────────────────────────────  │
+│  1. What is a JWT? What are the 3 parts? What algorithm signs it?        │
+│  2. Why have a Sessions TABLE if JWTs are already signed?                │
+│  3. Singleton vs Scoped vs Transient — give an example of each.          │
+│  4. What is Dependency Injection and why does it matter?                 │
+│  5. What is CSRF and how does [ValidateAntiForgeryToken] prevent it?      │
+│  6. What does UserId int FK → Users mean in the DB? What is a FK?        │
+│  7. What is the MatchScore formula? What is F1 score?                    │
+│  8. What is SignalR and why use it for chat instead of regular HTTP?      │
+│  9. What is the two-project architecture and why separate them?          │
+│  10. What HTTP status codes does the API use and when? (200/201/204/400/  │
+│       401/403/404/409/429/500)                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  SECTIONS PRIORITY KEY (for the detailed content below):                   ║
+║  [CRITICAL]  — must read, most likely to be asked                          ║
+║  [IMPORTANT] — read if you have time within the hour                       ║
+║  [OPTIONAL]  — skip if behind on time                                      ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  DETAILED NOTES START BELOW — follow the schedule above first, then come
+  back to these detailed sections for any topic you are still unsure about.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 HOW TO USE THIS FILE
   1. Read each SECTION heading and the "WHAT TO WRITE DOWN" block underneath it.
   2. Look up the exact file mentioned and read it alongside these notes.
@@ -12,7 +308,7 @@ HOW TO USE THIS FILE
      database tables so you can trace the full data flow.
 
 ================================================================================
-SECTION 0 — PROJECT OVERVIEW  (the big picture)
+SECTION 0 — PROJECT OVERVIEW  [CRITICAL — read in Hour 1]
 ================================================================================
 
 WHAT IS THIS PROJECT?
@@ -52,7 +348,7 @@ POTENTIAL PROFESSOR QUESTION:
      same API with zero backend changes.
 
 ================================================================================
-SECTION 1 — DATABASE STRUCTURE
+SECTION 1 — DATABASE STRUCTURE  [CRITICAL — read in Hour 1]
 ================================================================================
 
 FILE: APIPSI16/Data/xcleratesystemslinks_SampleDBContext.cs
@@ -308,7 +604,7 @@ POTENTIAL PROFESSOR QUESTIONS (DB):
      JWT itself is still mathematically valid.
 
 ================================================================================
-SECTION 2 — Program.cs  (API startup and DI container)
+SECTION 2 — Program.cs  [CRITICAL — read in Hour 3]
 ================================================================================
 
 FILE: APIPSI16/Program.cs
@@ -397,7 +693,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      a safe printable string. At runtime, Convert.FromBase64String() reverses it.
 
 ================================================================================
-SECTION 3 — AUTHENTICATION FLOW (AuthController + TokenService + SessionService)
+SECTION 3 — AUTHENTICATION FLOW  [CRITICAL — read in Hour 2]
 ================================================================================
 
 FILES:
@@ -492,7 +788,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      (prevents a non-admin from registering with admin role).
 
 ================================================================================
-SECTION 4 — BASE CONTROLLERS (ApiControllerBase)
+SECTION 4 — BASE CONTROLLERS  [IMPORTANT — read in Hour 2]
 ================================================================================
 
 FILES:
@@ -538,7 +834,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      HttpMessageHandler instances that are reused safely.
 
 ================================================================================
-SECTION 5 — JOB APPLICATIONS (JobApplicationsController + Apply flow)
+SECTION 5 — JOB APPLICATIONS  [CRITICAL — read in Hour 4]
 ================================================================================
 
 FILE: APIPSI16/Controllers/JobApplicationsController.cs
@@ -602,7 +898,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      ProfessionalUrl. Useful when the DB column name can't be renamed.
 
 ================================================================================
-SECTION 6 — OPPORTUNITIES  (OpportunitiesController API + MVC)
+SECTION 6 — OPPORTUNITIES + MATCH SCORING  [CRITICAL — read in Hour 4]
 ================================================================================
 
 FILE: APIPSI16/Controllers/OpportunitiesController.cs
@@ -659,7 +955,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      This is a "poor man's role-based routing" — one URL, different experiences.
 
 ================================================================================
-SECTION 7 — COMPANIES  (CompaniesController)
+SECTION 7 — COMPANIES  [IMPORTANT — read in Hour 7]
 ================================================================================
 
 FILE: APIPSI16/Controllers/CompaniesControllers.cs
@@ -699,7 +995,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      it was last read. Here it's handled by checking if the company still exists.
 
 ================================================================================
-SECTION 8 — CONNECTIONS  (ConnectionsController)
+SECTION 8 — CONNECTIONS  [CRITICAL — read in Hour 5]
 ================================================================================
 
 FILE: APIPSI16/Controllers/ConnectionsController.cs
@@ -738,7 +1034,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      the JSON to get the referenced entity ID.
 
 ================================================================================
-SECTION 9 — REAL-TIME CHAT  (ChatHub + ChatController)
+SECTION 9 — REAL-TIME CHAT  [CRITICAL — read in Hour 5]
 ================================================================================
 
 FILES:
@@ -810,7 +1106,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      is more efficient.
 
 ================================================================================
-SECTION 10 — NOTIFICATIONS  (NotificationsController)
+SECTION 10 — NOTIFICATIONS  [IMPORTANT — read in Hour 5 if time allows]
 ================================================================================
 
 FILE: APIPSI16/Controllers/NotificationsController.cs
@@ -842,7 +1138,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      allowing it to render a "View" link or display context.
 
 ================================================================================
-SECTION 11 — MVC ARCHITECTURE (XcelerateLinks project)
+SECTION 11 — MVC ARCHITECTURE  [CRITICAL — read in Hour 6]
 ================================================================================
 
 FILES:
@@ -898,7 +1194,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      returnUrl pointing to a malicious site and the app blindly redirects there.
 
 ================================================================================
-SECTION 12 — SERVICES
+SECTION 12 — SERVICES  [IMPORTANT — read in Hour 4 alongside match scoring]
 ================================================================================
 
 TokenService  (APIPSI16/Services/TokenService.cs)
@@ -944,7 +1240,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      city is still reasonably close. SmallCountries is a HashSet for O(1) lookup.
 
 ================================================================================
-SECTION 13 — INTERVIEW ROUNDS  (InterviewRoundsController)
+SECTION 13 — INTERVIEW ROUNDS  [IMPORTANT — read in Hour 7]
 ================================================================================
 
 FILE: APIPSI16/Controllers/InterviewRoundsController.cs
@@ -969,7 +1265,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      employer who triggered the schedule.
 
 ================================================================================
-SECTION 14 — PROFILE FEATURES (Education, Experience, Posts)
+SECTION 14 — PROFILE FEATURES  [OPTIONAL — skip if behind on time]
 ================================================================================
 
 FILES:
@@ -1002,7 +1298,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      ProfileExperience avoids the confusion of times (midnight vs midnight UTC).
 
 ================================================================================
-SECTION 15 — SUBSCRIPTION PLAN ENFORCEMENT
+SECTION 15 — SUBSCRIPTION PLAN ENFORCEMENT  [IMPORTANT — read in Hour 4]
 ================================================================================
 
 Subscription plans (User.SubscriptionPlan):
@@ -1030,7 +1326,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      Then AppliedAt >= monthStart. The query compares UTC datetimes.
 
 ================================================================================
-SECTION 16 — MIDDLEWARE  (SessionValidationMiddleware)
+SECTION 16 — MIDDLEWARE  [OPTIONAL — skip if behind on time]
 ================================================================================
 
 FILE: APIPSI16/Middleware/SessionValidationMiddleware.cs
@@ -1062,7 +1358,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      responses with the same format as controller responses.
 
 ================================================================================
-SECTION 17 — RAZOR VIEWS (MVC frontend) — KEY PATTERNS
+SECTION 17 — RAZOR VIEWS  [IMPORTANT — read in Hour 6]
 ================================================================================
 
 FILES: XcelerateLinks/Views/**/*.cshtml
@@ -1112,7 +1408,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      hooks in validation attributes.
 
 ================================================================================
-SECTION 18 — SECURITY SUMMARY
+SECTION 18 — SECURITY SUMMARY  [CRITICAL — read in Hour 6]
 ================================================================================
 
 AUTHENTICATION:
@@ -1158,7 +1454,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      so CSRF doesn't apply there (attacker can't set the Authorization header).
 
 ================================================================================
-SECTION 19 — QUICK REFERENCE: HTTP STATUS CODES USED IN THIS PROJECT
+SECTION 19 — HTTP STATUS CODES  [CRITICAL — memorise in Hour 8]
 ================================================================================
 
   200 OK              — successful GET, successful update
@@ -1173,7 +1469,7 @@ SECTION 19 — QUICK REFERENCE: HTTP STATUS CODES USED IN THIS PROJECT
   500 Internal Server Error — unexpected exceptions
 
 ================================================================================
-SECTION 20 — EXAM / INTERVIEW QUESTION BANK
+SECTION 20 — EXAM / INTERVIEW QUESTION BANK  [CRITICAL — use in Hour 8]
 ================================================================================
 
 ARCHITECTURE:
@@ -1238,8 +1534,13 @@ SUBSCRIPTIONS:
   40. Why use HTTP 429 for subscription limits rather than 403?
 
 ================================================================================
-STUDY SCHEDULE SUGGESTION (one topic per session)
+SECTION 21 — MULTI-DAY SCHEDULE  [only if you have more than 8 hours]
 ================================================================================
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  NOTE: If you have MORE than 8 hours, use this multi-day plan instead.     ║
+║  If you only have 8 hours, follow the schedule at the TOP of this file.    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 
 Day 1: Section 0 (overview) + Section 1 (full DB structure)
 Day 2: Section 2 (Program.cs, DI, startup) + Section 3 (auth flow)
