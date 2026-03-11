@@ -1,0 +1,1257 @@
+================================================================================
+  XCELERATELINKS — COMPLETE STUDY PLAN
+  Based on actual source code in the repository
+  For interview preparation and professor Q&A
+================================================================================
+
+HOW TO USE THIS FILE
+  1. Read each SECTION heading and the "WHAT TO WRITE DOWN" block underneath it.
+  2. Look up the exact file mentioned and read it alongside these notes.
+  3. Practise answering every Q&A entry out loud (or write answers in a notebook).
+  4. Pay attention to the [DB NOTE] callouts — they connect the code back to the
+     database tables so you can trace the full data flow.
+
+================================================================================
+SECTION 0 — PROJECT OVERVIEW  (the big picture)
+================================================================================
+
+WHAT IS THIS PROJECT?
+  XcelerateLinks is a professional networking platform (like a mini LinkedIn).
+  It is built as TWO separate ASP.NET Core projects that talk over HTTP:
+
+  A) APIPSI16  — the backend REST API (port 7263 / 5270)
+     - Uses Entity Framework Core to talk to SQL Server
+     - Secured with JWT Bearer tokens
+     - Exposes endpoints under /api/...
+     - Also hosts a SignalR hub for real-time chat (/hubs/chat)
+
+  B) XcelerateLinks  — the frontend MVC web app (separate port)
+     - Razor views (.cshtml) rendered server-side
+     - Calls the API over HTTP using IHttpClientFactory
+     - Secured with Cookie Authentication (ASP.NET Core Identity cookie)
+     - The JWT token is stored in an HttpOnly cookie so the browser never
+       exposes it to JavaScript
+
+KEY FEATURES
+  - User registration / login / password reset
+  - User profiles with bio, education, work experience, skills, photo
+  - Job opportunities posted by employers
+  - Job application pipeline with stages (Applied → Review → Interview → Offer → Hired)
+  - Interview scheduling (InterviewRounds)
+  - Real-time messaging (SignalR ChatHub)
+  - Connections (LinkedIn-style friend requests)
+  - Notifications
+  - Subscription plans (Free / Pro / Enterprise) with rate limiting
+  - Match scoring: opportunities ranked by how well they fit the user's preferences
+
+POTENTIAL PROFESSOR QUESTION:
+  Q: Why are there two projects instead of one?
+  A: Separation of concerns. The API can be replaced/upgraded independently.
+     The MVC app is just a "thick client" — it never talks directly to the DB;
+     it always goes through the API. This also means a mobile app could use the
+     same API with zero backend changes.
+
+================================================================================
+SECTION 1 — DATABASE STRUCTURE
+================================================================================
+
+FILE: APIPSI16/Data/xcleratesystemslinks_SampleDBContext.cs
+      APIPSI16/Models/*.cs  (one file per table)
+
+DATABASE: SQL Server — xcleratesystemslinks_SampleDB (hosted on sql.bsite.net)
+
+The schema is managed via EF Core (Entity Framework Core) using the Code-First
+approach — models are C# classes, and the DbContext describes how they map to
+SQL tables. EF Core Power Tools was used to scaffold the initial models from an
+existing DB (reverse-engineering).
+
+--- TABLE LIST & KEY COLUMNS ---
+
+TABLE: Users  (PK: UserID)
+  UserId       int         identity PK
+  Name         nvarchar(100)
+  Email        nvarchar(100)  unique (used for login)
+  Username     nvarchar        unique handle (@john_doe, also used for login)
+  PasswordHash nvarchar(200)   BCrypt/ASP.NET Identity hash
+  PhoneNumber  varchar(20)
+  Role         int             0=Admin, 1=User(jobseeker), 2=Employer
+  ProfileBio   varchar(250)    mapped as "Profile_Bio" in DB
+  DoB          date
+  LocationId   int             FK → Locations(LocationId)   [structured]
+  Location     nvarchar        legacy free-text location field
+  CountryId    int             FK → Countries(CountryId)
+  ProfilePictureUrl varchar(255)
+  BannerUrl    nvarchar
+  SubscriptionPlan int  default 0   (0=Free, 1=Pro, 2=Enterprise)
+  IsOpenToWork bit  default 1
+  EmployerRequestDocumentUrl  nvarchar(500)
+  EmployerRequestNote         nvarchar(1000)
+
+TABLE: Companies  (PK: CompanyId)
+  CompanyId    int PK
+  Name         nvarchar(200)  NOT NULL
+  Industry     nvarchar(100)
+  Location     nvarchar(150)
+  CreatedAt    datetime  default getdate()
+  CompanyLogoUrl  nvarchar(255)
+
+TABLE: CompanyMembers  (PK: CompanyMemberId)
+  CompanyMemberId  int PK
+  CompanyId        int  FK → Companies
+  UserId           int  FK → Users
+  Title            nvarchar       (job title in company, e.g. "CTO")
+  StartDate        date
+  EndDate          date  nullable
+  Role             int            1=Member, 2=Manager, 3=Admin(CompanyAdmin)
+
+TABLE: Opportunities  (PK: ID)
+  ID              int  PK (mapped as "Id" in C#, column name "ID")
+  Title           nvarchar(100)
+  CreatorID       int  FK → Users  (the employer who posted it)
+  CompanyID       int  FK → Companies
+  EmploymentType  tinyint   (0=FullTime, 1=PartTime, 2=Contract, 3=Internship)
+  SeniorityLevel  tinyint   (0=Junior, 1=Mid, 2=Senior, 3=Lead)
+  Location        nvarchar(200)  legacy text field
+  LocationId      int  FK → Locations
+  CountryId       int  FK → Countries
+  RemoteOption    tinyint   (0=OnSite, 1=Remote, 2=Hybrid)
+  OpportunityType tinyint   (0=Standard, 1=Guided, 2=LongTerm) — nullable
+  ApplicationScope tinyint  (0=External, 1=Internal, 2=Mixed) — nullable
+  RequiredJobRoleIds  nvarchar(500)  comma-separated FK values e.g. "1,3,7"
+
+  [DB NOTE] OpportunityType and ApplicationScope are stored as tinyint in SQL
+  but were added after the initial scaffold.  When they were nvarchar in the DB
+  but mapped as byte? in C#, EF threw InvalidCastException.  The fix is to
+  change the DB columns to tinyint to match the EF mapping.
+
+TABLE: JobApplications  (PK: JobApplicationId)
+  JobApplicationId int PK
+  OpportunityId    int  FK → Opportunities
+  UserId           int  FK → Users  (applicant)
+  Status           tinyint default 0
+                    0=Applied, 1=UnderReview, 2=Interview, 3=Offer, 4=Hired, 5=Rejected
+  AppliedAt        datetime  default getdate()
+  UpdatedAt        datetime  nullable
+  Name             varchar(50)  applicant's name at time of apply
+  CoverLetter      nvarchar    free-text
+  PhoneNumber      nvarchar(20)
+  LinkedInUrl      nvarchar(300)  mapped as "ProfessionalUrl" in C# using [Column("LinkedInUrl")]
+  PortfolioUrl     nvarchar(300)
+  YearsOfExperience int nullable
+  OpenToRemote     bit  nullable
+  SelectedJobRoleIds nvarchar(500)  comma-separated
+  ApplicantResponse  tinyint nullable  (1=Accept, 2=Decline)
+  LatestEmployerMessage nvarchar
+
+  [DB NOTE] The [Column("LinkedInUrl")] attribute on ProfessionalUrl tells EF
+  to use the actual DB column name "LinkedInUrl" while the C# property is
+  named ProfessionalUrl — this is an example of column name aliasing.
+
+TABLE: InterviewRounds  (PK: InterviewRoundId)
+  InterviewRoundId  int PK
+  JobApplicationId  int  FK → JobApplications
+  RoundNumber       tinyint
+  ScheduledAt       datetime  nullable
+  InterviewerUserId int  FK → Users
+  Notes             nvarchar
+  Outcome           tinyint  nullable
+
+TABLE: Sessions  (PK: SessionId)
+  SessionId     int PK
+  UserId        int  FK → Users
+  Token         nvarchar  NOT NULL  (the JWT string)
+  CreatedAt     datetime
+  ExpiresAt     datetime
+  IsActive      bit
+  InvalidatedAt datetime nullable
+
+  [DB NOTE] Sessions are used for server-side session tracking ON TOP OF the
+  JWT. Even if a JWT is mathematically valid, the server rejects it if the
+  session row has IsActive=false. This allows forced logout.
+
+TABLE: Connections  (PK: ConnectionId)
+  ConnectionId      int PK
+  RequesterUserId   int  FK → Users
+  AddresseeUserId   int  FK → Users
+  Status            tinyint   0=Pending, 1=Accepted
+  CreatedAt         datetime  default getdate()
+  AcceptedAt        datetime  nullable
+  UNIQUE INDEX on (RequesterUserId, AddresseeUserId) — prevents duplicate requests
+
+TABLE: Notifications  (PK: NotificationId)
+  NotificationId  int PK
+  UserId          int  FK → Users  (recipient)
+  ActorUserId     int  FK → Users  nullable  (who triggered it)
+  Type            nvarchar  NOT NULL  e.g. "ConnectionRequest", "ConnectionAccepted",
+                            "InterviewScheduled", "PerfectOpportunityMatch"
+  Payload         nvarchar  JSON string with context data e.g. {"connectionId":5}
+  IsRead          bit
+  CreatedAt       datetime
+
+TABLE: Chat  (PK: ChatId)
+  ChatId          int PK
+  Type            nvarchar(50)  "Direct" or "Group"
+  CreatedAt       datetime  default getdate()
+  CreatedByUserId int  FK → Users
+
+TABLE: ChatUsers  (PK: ChatUserId)
+  ChatUserId  int PK
+  ChatId      int  FK → Chat
+  UserId      int  FK → Users
+  JoinedAt    datetime  default getdate()
+  Role        nvarchar(50)  default "member"
+  UNIQUE INDEX on (ChatId, UserId) — a user can only be in a chat once
+
+TABLE: ChatMessages  (PK: MessageId)
+  MessageId     int PK
+  ChatId        int  FK → Chat
+  SenderUserId  int  FK → Users
+  MessageText   nvarchar  NOT NULL
+  CreatedAt     datetime  default getdate()
+  DeliveredAt   datetime
+  ReadAt        datetime  nullable  (null = unread)
+
+TABLE: Posts  (PK: PostId)
+  PostId      int PK
+  UserId      int  FK → Users
+  Content     nvarchar
+  CreatedAt   datetime
+  UpdatedAt   datetime  nullable
+  Visibility  tinyint   (0=Public, 1=Connections, 2=Private)
+
+TABLE: PostComments / PostReactions
+  Standard 1:N from Posts.  Comments have Content.
+  Reactions have a ReactionType (like/love/etc).
+
+TABLE: ProfileEducations  (PK: EducationId)
+  EducationId  int PK
+  UserId       int FK → Users
+  School       nvarchar  NOT NULL
+  Degree       nvarchar
+  FieldOfStudy nvarchar
+  StartYear    int
+  EndYear      int
+  Description  nvarchar
+
+TABLE: ProfileExperiences  (PK: ExperienceId)
+  ExperienceId  int PK
+  UserId        int FK → Users
+  CompanyName   nvarchar  NOT NULL
+  Title         nvarchar  NOT NULL
+  Location      nvarchar
+  StartDate     date NOT NULL
+  EndDate       date nullable
+  IsCurrent     bit
+  Description   nvarchar
+
+TABLE: Skills / UserSkills / SkillEndorsements
+  Skills: SkillId, Name  (UNIQUE on Name)
+  UserSkills: UserSkillId, UserId FK, SkillId FK
+  SkillEndorsements: EndorsementId, UserSkillId FK, EndorserUserId FK
+
+TABLE: JobRoles  (PK: JobRoleId)
+  JobRoleId  int PK
+  Name       nvarchar
+
+  [DB NOTE] JobRoles are NOT stored as a FK in Opportunities or JobApplications.
+  They are stored as a comma-separated string (RequiredJobRoleIds / SelectedJobRoleIds).
+  This is a deliberate design trade-off: simpler writes, but filtering/joining
+  requires splitting the string in code (no SQL JOIN possible directly).
+
+TABLE: EmployerCandidateHistory  (PK: EmployerCandidateHistoryId)
+  Related to employer's contact list and pipeline management.
+  PriorityId and IsDiscarded were added via raw SQL safety-net code at startup
+  (see Program.cs — they check IF NOT EXISTS then ALTER TABLE).
+
+TABLE: Locations / Countries
+  Locations: LocationId, Name, Region, CountryId FK
+  Countries: CountryId, Name, Code (ISO 2-letter)
+  Used for structured location matching via MatchScoreHelper.
+
+TABLE: AuditLog
+  Tracks admin actions: UserId, Action, TargetType, TargetId, CreatedAt.
+
+TABLE: UserJobPreferences / Nationalities / Ratings / SkillValidationRequests
+  Supporting lookup/profile tables.
+
+ENTITY FRAMEWORK CONCEPTS TO KNOW:
+  - DbSet<T>       : represents a table; you LINQ-query against it
+  - HasKey()       : defines the primary key
+  - HasForeignKey(): defines FK relationship
+  - HasMaxLength() : sets column size
+  - HasColumnType(): overrides EF's inferred SQL type (e.g. forces "tinyint")
+  - HasColumnName(): maps a C# property to a differently-named DB column
+  - HasDefaultValue/HasDefaultValueSql(): default on the DB side
+  - .Include()     : eager-loads navigation property (generates SQL JOIN)
+  - .AnyAsync()    : EXISTS check
+  - SaveChangesAsync(): flushes tracked changes to DB in a single transaction
+  - EntityState.Modified: marks entity as dirty so EF generates an UPDATE
+
+POTENTIAL PROFESSOR QUESTIONS (DB):
+  Q: What is the difference between LocationId and the Location text field?
+  A: Location is a legacy free-text field (e.g. "Lisboa"). LocationId is a FK
+     to a structured Locations table that also holds Region and Country.
+     The structured version enables the MatchScoreHelper to compare regions and
+     countries precisely. Both are kept for backward compatibility.
+
+  Q: Why is RequiredJobRoleIds stored as a comma-separated string instead of a
+     separate junction table?
+  A: Trade-off. A junction table (OpportunityJobRoles) would be more normalized
+     and allow direct SQL joins, but would require more complex queries and
+     migrations. The comma-string approach is simpler to write and read in code
+     but means filtering by role must be done in C# after fetching data.
+
+  Q: What is the role of the Sessions table given that JWTs are already signed?
+  A: JWTs are stateless — the server cannot "unsign" them before expiry.
+     The Sessions table adds server-side revocation: on logout, IsActive is set
+     to false and future requests with that token are rejected, even though the
+     JWT itself is still mathematically valid.
+
+================================================================================
+SECTION 2 — Program.cs  (API startup and DI container)
+================================================================================
+
+FILE: APIPSI16/Program.cs
+
+WHAT TO WRITE DOWN:
+  The .NET Minimal API top-level statements pattern. Key learning items:
+
+LINE-BY-LINE KEY CONCEPTS:
+
+  var builder = WebApplication.CreateBuilder(args);
+    Creates the host and DI container.
+
+  builder.Services.AddCors(...)
+    CORS = Cross-Origin Resource Sharing.
+    The API is on port 7263; the MVC app is on a different port.
+    Without CORS, browsers block the cross-origin requests.
+    AllowCredentials() is needed for cookies.
+
+  builder.Services.AddDbContext<xcleratesystemslinks_SampleDBContext>(options => {
+      options.UseSqlServer(defaultConn, sql => {
+          sql.MigrationsAssembly(typeof(Program).Assembly.FullName);
+      });
+  });
+    Registers the DbContext as SCOPED (one per HTTP request).
+    UseSqlServer() points EF at SQL Server.
+    MigrationsAssembly() — tells EF which assembly contains the Migrations
+    folder. Important because EF defaults to the assembly where the DbContext
+    lives; here we override it to the API assembly.
+
+  builder.Services.AddSingleton<ITokenService, TokenService>();
+    TokenService is a SINGLETON — one instance for the lifetime of the app.
+    Safe because it has no mutable per-request state (only reads config).
+
+  builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
+    BCrypt/ASP.NET Identity hasher. SCOPED = one per request.
+
+  builder.Services.AddScoped<ISessionService, SessionService>();
+    Needs DbContext so must be SCOPED too (can't inject scoped into singleton).
+
+  JWT configuration block:
+    keyBase64 = from env var XCELERATE_JWT_KEY or appsettings Jwt:Key
+    The key is BASE64-encoded (so it can safely go in a config string).
+    Decoded to bytes, then wrapped in SymmetricSecurityKey.
+    Validated with: ValidateIssuer, ValidateAudience, ValidateLifetime,
+    ValidateIssuerSigningKey all = true.
+    ClockSkew = 30 seconds (small tolerance for clock drift between servers).
+
+  ctx.Database.Migrate()   (called at startup inside a scope)
+    Applies any pending EF migrations automatically when the app starts.
+    If the migration fails it logs the error but continues — the app might
+    still work if the schema is already correct.
+
+  Raw SQL safety-net for EmployerCandidateHistory columns:
+    "IF NOT EXISTS ... ALTER TABLE ..."  run via ADO.NET (raw SQL).
+    This is a workaround for missing migration history (migrations were run
+    manually without the [Migration] attribute, so __EFMigrationsHistory is
+    incomplete). The raw SQL check is idempotent — safe to run every startup.
+
+  app.UseAuthentication() / app.UseAuthorization()
+    ORDER MATTERS: Authentication must come before Authorization.
+    Authentication = "who are you?" (reads the JWT, populates User.Claims)
+    Authorization  = "are you allowed to do this?" (checks [Authorize] attributes)
+
+  app.MapHub<ChatHub>("/hubs/chat")
+    Registers the SignalR WebSocket endpoint.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What is Dependency Injection and why does it matter here?
+  A: DI is a pattern where objects receive their dependencies from outside (the
+     DI container) instead of creating them internally. In this project, controllers
+     don't create DbContext or TokenService themselves — they declare them in the
+     constructor and the framework injects them. This makes testing easier (you
+     can inject mocks) and ensures the right lifetime (scoped vs singleton) is
+     respected.
+
+  Q: What is the difference between Singleton, Scoped, and Transient?
+  A: Singleton: one instance for the app lifetime (TokenService).
+     Scoped: one instance per HTTP request (DbContext, SessionService).
+     Transient: new instance every time it's requested.
+     Getting this wrong causes bugs: e.g. injecting a Scoped DbContext into a
+     Singleton would cause it to be reused across requests (data leaks).
+
+  Q: Why is the JWT key stored as Base64?
+  A: The key is raw bytes (e.g. 32 bytes = 256-bit key). JSON config files store
+     strings, not binary. Base64 is the standard way to represent binary data as
+     a safe printable string. At runtime, Convert.FromBase64String() reverses it.
+
+================================================================================
+SECTION 3 — AUTHENTICATION FLOW (AuthController + TokenService + SessionService)
+================================================================================
+
+FILES:
+  APIPSI16/Controllers/AuthController.cs
+  APIPSI16/Services/TokenService.cs
+  APIPSI16/Services/SessionService.cs
+  APIPSI16/Models/Session.cs
+
+[DB NOTE] Sessions table stores every active session token.
+          Users table stores PasswordHash.
+
+--- LOGIN FLOW (line by line) ---
+
+POST /api/auth/login   receives { username, password }
+
+1. Normalise username to lowercase, look up in DB by email OR username.
+2. _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, plaintext)
+   → Returns Failed / Success / SuccessRehashNeeded
+   SuccessRehashNeeded means the old hash format is outdated; re-hash and save.
+3. Invalidate all previous active sessions for this user (single sign-on).
+4. Build Claims array:
+     ClaimTypes.Name            = user display name
+     ClaimTypes.NameIdentifier  = user.UserId (used everywhere as the "uid")
+     ClaimTypes.Role            = "0" or "1" or "2"
+5. _tokenService.CreateToken() → JwtSecurityToken with
+     Subject=userId, custom claims, Issuer, Audience, Expiry, HMAC-SHA256 sig
+6. sessionService.CreateSessionAsync() → INSERT into Sessions table
+7. Return { token, expiresAt }
+
+--- TOKENSERVICE ---
+  CreateToken():
+    - Reads key from env var (overrides appsettings → env vars win in prod)
+    - Decodes base64 → bytes → SymmetricSecurityKey
+    - Creates JwtSecurityToken with all claims
+    - JwtSecurityTokenHandler().WriteToken() serialises to the "xxxxx.yyyyy.zzzzz" string
+    - Stores expiry in _lastExpiry field (singleton keeps this between calls)
+
+--- SESSIONSERVICE ---
+  CreateSessionAsync():
+    1. Fetches ALL active sessions for this userId
+    2. Marks them all IsActive=false (old sessions invalidated)
+    3. Creates new Session row with the new JWT string
+  IsSessionValidAsync():
+    1. Looks up session by (userId, token, IsActive=true, ExpiresAt > now)
+    2. Returns bool — used by ApiControllerBase.ValidateSessionAsync()
+  InvalidateSessionAsync():
+    Sets IsActive=false for the token → used on logout
+
+--- MVC SIDE (AccountController) ---
+  On successful login:
+    1. Calls POST /api/auth/login to get the JWT
+    2. Parses the JWT with JwtSecurityTokenHandler().ReadJwtToken()  (NO signature
+       validation here — the API already validated it)
+    3. Calls sessionService.InvalidateAllUserSessionsAsync() then
+       sessionService.CreateSessionAsync() — the MVC app maintains its own
+       session record too
+    4. Stores JWT in an HttpOnly cookie named "ApiAccessToken"
+    5. Signs in using ASP.NET Core Cookie Auth (HttpContext.SignInAsync)
+       — this creates the browser authentication cookie
+
+  HttpOnly cookie:
+    - Browser sends it on every request automatically
+    - JavaScript CANNOT read it (prevents XSS token theft)
+    - Secure flag set when HTTPS is in use
+
+  On subsequent requests (CreateAuthorizedClient):
+    Reads the cookie → puts it in Authorization: Bearer <token> header of the
+    HTTP call to the API.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: Why are there TWO sessions being tracked (one in APIPSI16, one in MVC)?
+  A: The API session validates the JWT on every API call. The MVC session cookie
+     authenticates the browser request to the Razor app. They hold the same token
+     but serve different auth systems.
+
+  Q: What is HMAC-SHA256 and why is it used for JWTs?
+  A: HMAC-SHA256 is a symmetric signature algorithm (same key to sign and verify).
+     It prevents anyone from modifying the JWT payload (e.g. changing Role from
+     "1" to "0") without knowing the secret key.
+
+  Q: How does the password hashing work?
+  A: ASP.NET Core's PasswordHasher<T> uses PBKDF2 with HMAC-SHA512, 10,000
+     iterations, and a random salt. The result is a base64 string stored in
+     PasswordHash. VerifyHashedPassword extracts the salt from the stored hash
+     and runs the same derivation on the input password to compare.
+
+  Q: What is the RegisterRequest class and what validations does it have?
+  A: It's a DTO with [Required], [EmailAddress], [MinLength(8)] on Password,
+     and [RegularExpression] for PhoneNumber. Validation fires automatically
+     because of [ApiController] — ModelState.IsValid is checked before the
+     method body runs. If callerRole != "0", the Role field is forced to 1
+     (prevents a non-admin from registering with admin role).
+
+================================================================================
+SECTION 4 — BASE CONTROLLERS (ApiControllerBase)
+================================================================================
+
+FILES:
+  APIPSI16/Controllers/ApiControllerBase.cs    ← API side
+  XcelerateLinks/Controllers/ApiControllerBase.cs  ← MVC side
+
+--- API SIDE ---
+  ValidateSessionAsync():
+    1. Check User.Identity.IsAuthenticated  (JWT was valid → ASP.NET set this)
+    2. Extract userId from ClaimTypes.NameIdentifier
+    3. Extract token from Authorization header
+    4. Call _sessionService.IsSessionValidAsync(userId, token)
+    5. Return null if OK, return Unauthorized result if not
+  Returns null on success so callers can do:
+    var result = await ValidateSessionAsync();
+    if (result != null) return result;
+
+--- MVC SIDE ---
+  CreateAuthorizedClient():
+    Gets the HttpClient from IHttpClientFactory (named "Api")
+    Reads the JWT cookie → sets as Bearer token header
+    All API calls use this client
+
+  GetCurrentUserId():
+    Reads ClaimTypes.NameIdentifier from the cookie-auth principal
+
+  IsAdmin():
+    Checks ClaimTypes.Role == "0"
+
+  SafeReadStringAsync():
+    Reads error response body without throwing — used to surface API errors
+    to the MVC model state
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: Why return null from ValidateSessionAsync instead of throwing an exception?
+  A: Exceptions are expensive and are meant for exceptional conditions, not
+     normal auth failures. Returning null (valid) or IActionResult (invalid)
+     keeps it efficient. The caller checks and returns early if not null.
+
+  Q: What is IHttpClientFactory and why use it instead of new HttpClient()?
+  A: HttpClient should NOT be instantiated with new each time (causes socket
+     exhaustion due to port reuse). IHttpClientFactory manages a pool of
+     HttpMessageHandler instances that are reused safely.
+
+================================================================================
+SECTION 5 — JOB APPLICATIONS (JobApplicationsController + Apply flow)
+================================================================================
+
+FILE: APIPSI16/Controllers/JobApplicationsController.cs
+[DB NOTE] Writes to JobApplications table. Reads Opportunities and Users tables.
+
+--- APPLY (POST /api/jobapplications/apply) ---
+
+1. GetUserId() — extracts int from JWT claim
+2. Duplicate check: AnyAsync(a => a.OpportunityId == dto.OpportunityId && a.UserId == uid)
+   → returns 409 Conflict if already applied
+3. Subscription check:
+   If user.SubscriptionPlan == 0 (Free plan):
+     Count applications THIS calendar month (AppliedAt >= monthStart)
+     If >= 5 → return 429 Too Many Requests
+4. Create JobApplication object (maps DTO fields to model)
+   Note: [Column("LinkedInUrl")] maps ProfessionalUrl to the DB column named LinkedInUrl
+5. db.JobApplications.AddAsync(app) + SaveChangesAsync()
+6. Best-effort notification to opportunity creator (failure logged, not bubbled)
+
+STATUS LIFECYCLE:
+  0=Applied → 1=UnderReview → 2=Interview → 3=Offer → 4=Hired / 5=Rejected
+  Employer changes status via POST /api/jobapplications/{id}/status
+  Applicant responds to interview/offer via POST /api/jobapplications/{id}/applicant-respond
+    ApplicantResponse: 1=Accept → if offer (status=3) → moves to Hired (4) + sets IsOpenToWork=false
+    ApplicantResponse: 2=Decline → moves to Rejected (5)
+
+ApplyDto fields (what the form submits):
+  OpportunityId (required)
+  Name, CoverLetter, PhoneNumber
+  ProfessionalUrl  [Url validation, max 300 chars]
+  PortfolioUrl     [Url validation, max 300 chars]
+  YearsOfExperience (int)
+  OpenToRemote     (bool?) — rendered as a checkbox in the form
+  SelectedJobRoleIds (comma-separated role IDs chosen by applicant)
+
+OPEN TO REMOTE — IMPORTANT NOTE:
+  In the Razor form, this must be:
+    <input type="checkbox" asp-for="Application.OpenToRemote" />
+  Without type="checkbox", asp-for on a bool? renders as a text input.
+  The checkbox submits "true"/"false" which is bound to bool? by model binding.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What HTTP status code do you return when a user applies twice?
+  A: 409 Conflict — the resource (application) already exists for that
+     (user, opportunity) pair.
+
+  Q: What is 429 Too Many Requests and when is it used here?
+  A: When a Free plan user has already submitted 5 applications in the current
+     calendar month. The limit is enforced by counting rows in JobApplications
+     where UserId matches and AppliedAt >= first day of the current month.
+
+  Q: What does "best-effort notification" mean in the Apply method?
+  A: The notification INSERT is wrapped in try/catch. If it fails (e.g. DB
+     constraint), the error is only logged — it does NOT roll back the already-
+     saved application. The application submission is considered more important
+     than the notification side-effect.
+
+  Q: What is [Column("LinkedInUrl")] used for?
+  A: It's a Data Annotations attribute that tells EF Core to use "LinkedInUrl"
+     as the actual database column name, even though the C# property is named
+     ProfessionalUrl. Useful when the DB column name can't be renamed.
+
+================================================================================
+SECTION 6 — OPPORTUNITIES  (OpportunitiesController API + MVC)
+================================================================================
+
+FILE: APIPSI16/Controllers/OpportunitiesController.cs
+      XcelerateLinks/Controllers/OpportunitiesController.cs
+
+--- API KEY ENDPOINTS ---
+
+GET /api/opportunities
+  Returns all opportunities. Include(o => o.Company) for name.
+
+GET /api/opportunities/with-match
+  For each opportunity, calculates a match score against the current user's
+  preferences (job roles + location).
+  Uses MatchScoreHelper:
+    RoleScore    = F1 score(precision, recall) of role overlap * 100
+    LocationScore = ComputeLocationScore() based on LocationId + Region + Country
+    WeightedScore = roleScore * 0.7 + locationScore * 0.3
+  Returns sorted by MatchScore desc.
+
+POST /api/opportunities  [Authorize(Roles = "0,2")]
+  Creates a new opportunity. Only admin (0) or employer (2) can create.
+  After saving, calls NotifyPerfectMatchUsersAsync() — finds all job seekers
+  with 100% match score and sends them a notification.
+
+--- MVC SIDE ---
+  Index() is role-dispatched:
+    Admin → loads all via GET /api/opportunities → renders View (table)
+    User/Employer → loads via GET /api/opportunities/with-match → UserIndex view
+  Supports query filters: q (text search), locationId, employmentType, remoteOption
+  Filters are applied IN MEMORY (after the API returns the list) because the
+  /with-match endpoint returns a rich DTO that's already in memory.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What is the MatchScore formula?
+  A: It's a weighted combination:
+       roleScore    = F1 score = 2 * matchCount / (userPrefCount + requiredRoleCount) * 100
+       locationScore = 0–100 based on exact/region/country proximity
+       final = roleScore * 0.7 + locationScore * 0.3
+     If the opportunity has no required roles, only location is used (weight 1.0).
+     If there is no location data, only roles are used (weight 1.0).
+
+  Q: What is the F1 score and why use it for role matching?
+  A: F1 = harmonic mean of precision and recall.
+     Precision = fraction of user's preferences that match required roles.
+     Recall = fraction of required roles that the user covers.
+     Using only recall would give 100% when a user has ALL required roles even
+     if they also listed 50 other roles. F1 penalises both overspecific and
+     underspecific matches.
+
+  Q: How does role-dispatching work in the MVC controller?
+  A: The Index() method checks IsAdmin() (ClaimTypes.Role == "0").
+     If admin, it fetches the admin endpoint and returns a different view.
+     If regular user, it fetches the match endpoint and returns UserIndex view.
+     This is a "poor man's role-based routing" — one URL, different experiences.
+
+================================================================================
+SECTION 7 — COMPANIES  (CompaniesController)
+================================================================================
+
+FILE: APIPSI16/Controllers/CompaniesControllers.cs
+[DB NOTE] Companies, CompanyMembers, Opportunities tables.
+
+KEY CONCEPTS:
+  [Authorize(Roles = "0,2")]  — multiple roles in one attribute
+    Role 0 = Admin, Role 2 = Employer
+
+  InviteMember():
+    Employer can only invite if they are themselves a CompanyAdmin (Role >= 3)
+    This is a two-level check: first the JWT role (must be "2" or "0"),
+    then the CompanyMember.Role (must be >= 3 to manage the company).
+
+  UpdateCompany():
+    Uses _context.Entry(company).State = EntityState.Modified
+    This marks ALL properties as dirty and generates an UPDATE for every column.
+    Alternative (better for partial updates): attach and mark only changed props.
+
+  DbUpdateConcurrencyException:
+    Caught in UpdateCompany. If the row was deleted between the GET and the PUT,
+    CompanyExists() returns false → 404. Otherwise re-throw.
+
+  GetCompanyProfile():
+    Single endpoint that returns company + members + opportunities as a DTO.
+    Uses projection with Select(...) to avoid loading unnecessary columns.
+    CompanyMemberDTO and OpportunityDTO are lightweight shapes for the response.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What does [Authorize(Roles = "0,2")] mean?
+  A: The user's JWT must contain a role claim of either "0" (admin) or "2"
+     (employer). If neither, the framework returns 403 Forbidden automatically.
+
+  Q: What is DbUpdateConcurrencyException?
+  A: Thrown by EF when an optimistic concurrency check fails — typically when
+     the row being updated has been modified or deleted by another request since
+     it was last read. Here it's handled by checking if the company still exists.
+
+================================================================================
+SECTION 8 — CONNECTIONS  (ConnectionsController)
+================================================================================
+
+FILE: APIPSI16/Controllers/ConnectionsController.cs
+[DB NOTE] Connections table. UNIQUE INDEX on (RequesterUserId, AddresseeUserId).
+
+KEY FLOW:
+  POST /api/connections/request
+    1. Check not self-connecting
+    2. Check no existing connection (either direction)
+    3. Free plan limit: max 50 accepted connections → 429 if exceeded
+    4. Create Connection row with Status=0 (Pending)
+    5. Create Notification for the addressee (type "ConnectionRequest")
+       Payload = JSON string {"connectionId":5}
+
+  POST /api/connections/{id}/accept
+    Sets Status=1, AcceptedAt=now
+    Sends "ConnectionAccepted" notification back to the requester
+
+  GET /api/connections/my-with-users
+    Single JOIN query to get accepted connections WITH the other user's details.
+    Uses .Join() LINQ to produce an anonymous type — avoids N+1 queries.
+
+  GET /api/connections/pending
+    Incoming connection requests (Status=0, AddresseeUserId == me)
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: How is a duplicate connection request prevented?
+  A: The DB has a UNIQUE INDEX on (RequesterUserId, AddresseeUserId). The code
+     also checks for an existing row in EITHER direction with AnyAsync(). If
+     found, it returns 409 Conflict.
+
+  Q: What is a notification Payload and why is it a JSON string?
+  A: The Payload column stores context-specific data (e.g. which connectionId
+     triggered the notification). Storing it as a JSON string in a single column
+     avoids needing a separate table for each notification type. The client parses
+     the JSON to get the referenced entity ID.
+
+================================================================================
+SECTION 9 — REAL-TIME CHAT  (ChatHub + ChatController)
+================================================================================
+
+FILES:
+  APIPSI16/Hubs/ChatHub.cs
+  APIPSI16/Controllers/ChatController.cs
+[DB NOTE] Chat, ChatUsers, ChatMessages tables.
+
+--- ChatHub (SignalR) ---
+  [Authorize] — JWT must be valid to connect.
+  Uses ConcurrentDictionary<int, HashSet<string>> _userConnections
+    Key = userId, Value = set of connection IDs (a user can have multiple tabs)
+    STATIC field → shared across all instances of ChatHub in the process.
+
+  OnConnectedAsync():
+    Adds ConnectionId to _userConnections for this user.
+    Adds connection to the user's personal group: "user_{userId}"
+    Joins all chat groups this user is a member of (from ChatUsers table).
+    Notifies all other members of each chat that this user is now online.
+
+  OnDisconnectedAsync():
+    Removes ConnectionId from _userConnections.
+    If no connections left (last tab closed) → broadcast UserOnline(false) to all chats.
+
+  SendMessage(int chatId, string messageText):
+    1. Verify user is a chat participant (ChatUsers table)
+    2. Create ChatMessage in DB
+    3. Broadcast to group "chat_{chatId}" via Clients.Group()
+       Sends messageId, chatId, senderUserId, senderName, text, timestamps
+
+  MarkMessageAsRead(int chatId, int messageId):
+    Sets ReadAt on the ChatMessage if not already set.
+    Notifies the sender (via "user_{senderId}" group) that their message was read.
+
+  TypingIndicator():
+    Clients.OthersInGroup() — sends to everyone in the group EXCEPT the caller.
+
+--- ChatController (REST API) ---
+  Non-real-time operations (CRUD, history, read status) go through REST.
+  GET /api/chat/conversations — returns user's chats with unread counts and last message.
+  POST /api/chat/with-participants — idempotency: for Direct (2-person) chats,
+    checks if one already exists and returns it instead of creating a duplicate.
+  Pagination for messages: /api/chat/{id}/messages?page=1&pageSize=50
+    Uses .Skip((page-1)*pageSize).Take(pageSize)
+  ExecuteUpdateAsync for bulk read (mark-all-as-read without loading entities).
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What is SignalR and how does it differ from regular HTTP?
+  A: SignalR is a library that provides a real-time bidirectional communication
+     channel between server and browser. It uses WebSockets as the primary
+     transport (falling back to Server-Sent Events or Long Polling). Unlike HTTP
+     (request-response), the server can PUSH data to clients at any time.
+
+  Q: What is a SignalR Group?
+  A: A named set of connections. When you call Groups.AddToGroupAsync(), the
+     connection is added to the group. Clients.Group("chat_5").SendAsync()
+     delivers the message to all connections in that group simultaneously.
+     This project uses groups "chat_{chatId}" and "user_{userId}".
+
+  Q: Why is _userConnections a static ConcurrentDictionary?
+  A: Hubs are transient (new instance per connection). To share state across
+     all connections (e.g. know which users are online), it must be static.
+     ConcurrentDictionary is thread-safe for concurrent Add/Remove operations
+     from multiple connections.
+
+  Q: What is ExecuteUpdateAsync and why use it instead of loading entities?
+  A: ExecuteUpdateAsync translates directly to a single SQL UPDATE statement
+     without loading any entities into memory. For mark-all-as-read, loading
+     hundreds of messages just to set ReadAt would waste memory. Direct update
+     is more efficient.
+
+================================================================================
+SECTION 10 — NOTIFICATIONS  (NotificationsController)
+================================================================================
+
+FILE: APIPSI16/Controllers/NotificationsController.cs
+[DB NOTE] Notifications table.
+
+ENDPOINTS:
+  GET /api/notifications/my
+    Returns up to 100 most recent notifications for the current user,
+    ordered by CreatedAt descending. Only the user's own notifications.
+
+  POST /api/notifications/{id}/markread
+    Sets IsRead=true on a notification.
+    Checks n.UserId == uid — prevents marking someone else's notification.
+
+NOTIFICATIONS ARE CREATED BY OTHER CONTROLLERS:
+  ConnectionsController: "ConnectionRequest", "ConnectionAccepted"
+  InterviewRoundsController: "InterviewScheduled"
+  OpportunitiesController: "PerfectOpportunityMatch"
+  JobApplicationsController: various application status changes
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: Why is the notification list limited to 100?
+  A: Performance. .Take(100) prevents a user with thousands of notifications
+     from causing a slow query or large response payload.
+
+  Q: How is the Payload field structured?
+  A: It's a JSON string like {"connectionId":5} or {"applicationId":12}.
+     The client parses it to know what entity triggered the notification,
+     allowing it to render a "View" link or display context.
+
+================================================================================
+SECTION 11 — MVC ARCHITECTURE (XcelerateLinks project)
+================================================================================
+
+FILES:
+  XcelerateLinks/Controllers/AccountController.cs   (login, register, password reset)
+  XcelerateLinks/Controllers/ApiControllerBase.cs   (base for all MVC controllers)
+  XcelerateLinks/Controllers/BaseController.cs      (session validation for MVC)
+  XcelerateLinks/Controllers/ApplicationsController.cs
+  XcelerateLinks/Controllers/OpportunitiesController.cs
+  XcelerateLinks/Controllers/UsersController.cs
+  ... etc.
+
+GENERAL MVC PATTERN IN THIS PROJECT:
+  Every controller action follows this pattern:
+    1. if (!await ValidateSessionAsync()) return RedirectToAction("Login", "Account");
+    2. var client = CreateAuthorizedClient();   // client has Bearer token header
+    3. var resp = await client.GetAsync("api/...");
+    4. if (!resp.IsSuccessStatusCode) { ViewBag.Error = ...; return View(...); }
+    5. var data = await resp.Content.ReadFromJsonAsync<T>();
+    6. return View(data);
+
+  No direct DB access from MVC controllers — all data comes from the API.
+
+ACCOUNT CONTROLLER FLOW:
+  Login (GET)  → renders Login.cshtml with LoginViewModel
+  Login (POST) → calls /api/auth/login, stores JWT in HttpOnly cookie,
+                 calls HttpContext.SignInAsync() for cookie auth,
+                 redirects to return URL or home
+
+  ForgotPassword flow:
+    1. User enters email
+    2. PasswordResetService.GeneratePasswordResetToken(email) → returns a
+       short-lived token stored in memory (e.g. GUID + timestamp)
+    3. IEmailSender sends an email with a link containing the token
+    4. ResetPassword(token) view validates the token, calls /api/auth/reset-password
+    Note: same "success" message shown whether email exists or not (prevents
+    email enumeration attack).
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What is [ValidateAntiForgeryToken] and why is it on POST actions?
+  A: It validates a hidden form field (_RequestVerificationToken) that ASP.NET
+     generates per session. It prevents CSRF (Cross-Site Request Forgery) attacks
+     where a malicious page tricks the browser into submitting a form to this site.
+
+  Q: Why does Login parse the JWT on the MVC side without verifying the signature?
+  A: The MVC app trusts that the API already validated the JWT before issuing it.
+     The MVC app only needs to extract the user ID and role from the claims to
+     set up the cookie identity. Full signature verification would require the
+     MVC app to also know the secret key.
+
+  Q: What is LocalRedirect and why use it instead of Redirect?
+  A: LocalRedirect only allows redirects to local URLs (relative paths).
+     It prevents Open Redirect vulnerabilities where an attacker crafts a
+     returnUrl pointing to a malicious site and the app blindly redirects there.
+
+================================================================================
+SECTION 12 — SERVICES
+================================================================================
+
+TokenService  (APIPSI16/Services/TokenService.cs)
+  CreateToken(): builds and signs a JWT string.
+  GetLastExpiry(): returns the expiry DateTime of the last token created.
+
+SessionService  (APIPSI16/Services/SessionService.cs)
+  See Section 3 above.
+
+MatchScoreHelper  (APIPSI16/Services/MatchScoreHelper.cs)  [STATIC]
+  ComputeLocationScore(): pure function, no DB.
+    100 = exact LocationId match
+    65  = same region, small country (PT, NL, BE, etc.)
+    35  = different region, small country
+    50  = same region, large country (US, etc.)
+    0   = different country or different region in a large country
+    -1  = no location data available
+  ComputeRoleScore(): F1 score calculation.
+  ComputeWeightedScore(): combines role + location with 70/30 weighting.
+
+InputValidation  (APIPSI16/Services/InputValidation.cs)
+  PhonePattern: regex for +351 9xx or international formats.
+  Used as [RegularExpression(InputValidation.PhonePattern)] in DTOs/models.
+  Static helper — used by both AuthController and ApplyDto.
+
+FileStorageService  (APIPSI16/Services/FileStorageService.cs)
+  SaveFileAsync(): generates a GUID filename, saves to /uploads/{folder}/.
+    Returns the relative URL (/uploads/companies/abc123.jpg).
+  DeleteFileAsync(): deletes existing file before saving a new one.
+  ValidateImageFile(): checks extension (.jpg/.jpeg/.png/.gif) and max 5 MB.
+  ValidateDocumentOrImageFile(): also allows .pdf.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: Why use Guid.NewGuid() for file names instead of the original file name?
+  A: Prevents name collisions, prevents directory traversal attacks
+     (e.g. ../../etc/passwd as a file name), and avoids revealing the original
+     file name to other users. GUIDs are effectively unique across all uploads.
+
+  Q: What is the small-country heuristic in MatchScoreHelper?
+  A: Large countries (US, Canada, Brazil) span vast distances — being in the
+     same country but different state is essentially a different job market.
+     Small countries (Portugal, Netherlands) are compact enough that a different
+     city is still reasonably close. SmallCountries is a HashSet for O(1) lookup.
+
+================================================================================
+SECTION 13 — INTERVIEW ROUNDS  (InterviewRoundsController)
+================================================================================
+
+FILE: APIPSI16/Controllers/InterviewRoundsController.cs
+[DB NOTE] InterviewRounds table. FK to JobApplications.
+
+POST /api/interviewrounds/schedule
+  Creates an InterviewRound row linked to a JobApplication.
+  Sends an "InterviewScheduled" notification to the applicant (app.UserId).
+  The notification Payload includes the scheduledAt timestamp in ISO 8601 format.
+
+Outcome field (tinyint nullable):
+  Null = pending, 1 = passed, 2 = failed, etc.
+
+RoundNumber (tinyint):
+  Tracks which round this is (1st, 2nd, 3rd interview).
+  An application can have multiple InterviewRound rows.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: How does the controller know who to notify when an interview is scheduled?
+  A: It fetches the JobApplication by JobApplicationId (app.UserId is the
+     applicant). The notification goes to app.UserId with the actor being the
+     employer who triggered the schedule.
+
+================================================================================
+SECTION 14 — PROFILE FEATURES (Education, Experience, Posts)
+================================================================================
+
+FILES:
+  APIPSI16/Controllers/ProfileEducations.cs
+  APIPSI16/Controllers/ProfileExperiencesController.cs
+  APIPSI16/Controllers/PostsController.cs
+  APIPSI16/Controllers/PostCommentsController.cs
+  APIPSI16/Controllers/PostReactionsController.cs
+[DB NOTE] ProfileEducations, ProfileExperiences, Posts, PostComments, PostReactions
+
+Standard CRUD controllers:
+  GET    → list owned items (or all for admin)
+  POST   → create (always linked to current user)
+  PUT    → update (only own records)
+  DELETE → delete (own records, or admin can delete any)
+
+ProfileExperience model:
+  IsCurrent (bool): if true, EndDate is null (still working there).
+  DateOnly type (C# 6+): represents a date without time, maps to SQL date column.
+
+Post visibility:
+  0=Public, 1=Connections, 2=Private
+  The controller filters what the requesting user can see based on their
+  connection status with the post author.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What is DateOnly and how does it differ from DateTime?
+  A: DateOnly (introduced in .NET 6) stores only year/month/day, no time component.
+     It maps to SQL Server's date type. Using it for StartDate/EndDate on
+     ProfileExperience avoids the confusion of times (midnight vs midnight UTC).
+
+================================================================================
+SECTION 15 — SUBSCRIPTION PLAN ENFORCEMENT
+================================================================================
+
+Subscription plans (User.SubscriptionPlan):
+  0 = Free    → 5 applications/month, 50 connections max
+  1 = Pro     → unlimited
+  2 = Enterprise → unlimited
+
+Enforcement points:
+  JobApplicationsController.Apply():
+    if (user.SubscriptionPlan == 0)
+      count apps this month → if >= 5 return 429
+  ConnectionsController.CreateRequest():
+    if (user.SubscriptionPlan == 0)
+      count accepted connections → if >= 50 return 429
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: Why use HTTP 429 (Too Many Requests) instead of 403 (Forbidden)?
+  A: 403 means permanently forbidden (wrong role/permission). 429 means the
+     request is temporarily rejected due to rate/quota limits. It semantically
+     communicates "try again with a different plan" rather than "you can never
+     do this."
+
+  Q: How is "this calendar month" calculated?
+  A: var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc)
+     Then AppliedAt >= monthStart. The query compares UTC datetimes.
+
+================================================================================
+SECTION 16 — MIDDLEWARE  (SessionValidationMiddleware)
+================================================================================
+
+FILE: APIPSI16/Middleware/SessionValidationMiddleware.cs
+
+NOTE: This middleware is currently DISABLED in Program.cs:
+  // REMOVE: app.UseMiddleware<SessionValidationMiddleware>();
+The same validation is done per-controller by ApiControllerBase.ValidateSessionAsync().
+The middleware is kept in the codebase as an alternative global approach.
+
+HOW IT WOULD WORK IF ENABLED:
+  Runs on every request (after UseAuthentication).
+  Skips /api/auth/login, /api/auth/register, /api/auth/login-debug paths.
+  Reads UserId from claim + token from header.
+  Looks up Session in DB.
+  Returns 401 if session not found / inactive / expired.
+  Otherwise calls _next(context) to continue the pipeline.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What is ASP.NET Core middleware?
+  A: Middleware is a component in the request pipeline. Each middleware
+     calls _next(context) to pass the request to the next component.
+     The pipeline is: UseHttpsRedirection → UseCors → UseAuthentication →
+     UseAuthorization → MapControllers.
+
+  Q: Why was the middleware disabled in favour of per-controller validation?
+  A: Per-controller validation (ApiControllerBase) gives more granular control.
+     Global middleware might interfere with SignalR handshake or Swagger UI.
+     Also, the middleware approach can't easily return structured JSON error
+     responses with the same format as controller responses.
+
+================================================================================
+SECTION 17 — RAZOR VIEWS (MVC frontend) — KEY PATTERNS
+================================================================================
+
+FILES: XcelerateLinks/Views/**/*.cshtml
+
+KEY RAZOR PATTERNS:
+
+  @model T                          — declares the strongly-typed model
+  @Html.AntiForgeryToken()          — inserts the CSRF hidden field
+  <input asp-for="Property" />      — generates id, name, value from model property
+  <span asp-validation-for="X" />   — shows ModelState error for field X
+  <div asp-validation-summary="All" />  — summary of all errors
+  @Html.DisplayNameFor(m => m.Prop) — uses [Display(Name=...)] attribute
+  ViewBag.X                         — dynamic data from controller to view
+
+  asp-controller, asp-action on <a> — generates correct href from routing
+  asp-route-id                      — adds route parameter
+
+CHECKBOX FOR bool? PROPERTY:
+  WRONG:  <input asp-for="Application.OpenToRemote" />
+          (renders as text input because ASP.NET doesn't know it's a checkbox)
+  RIGHT:  <input type="checkbox" asp-for="Application.OpenToRemote" />
+          (explicitly sets type=checkbox, model binder converts "true"/"false"
+          to bool?)
+
+PARTIAL VIEWS:
+  <partial name="_ValidationScriptsPartial" />
+    Includes jquery.validate.min.js and jquery.validate.unobtrusive.min.js.
+    Enables client-side validation using the data- attributes generated by
+    asp-validation-for.
+
+TempData vs ViewBag:
+  TempData["X"] — survives a redirect (stored in session/cookie, cleared after read)
+                   Used for success/error messages after POST-then-Redirect.
+  ViewBag.X     — only lives for the current request (passed from controller to view)
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What is the Post-Redirect-Get pattern?
+  A: After a successful POST (form submit), instead of returning a view directly,
+     the server redirects to a GET action. This prevents the browser from
+     resubmitting the form on page refresh (F5). TempData is used to pass the
+     success message across the redirect.
+
+  Q: What are Tag Helpers in ASP.NET Core?
+  A: Tag helpers (asp-for, asp-controller, asp-action, etc.) are server-side
+     components that transform HTML elements in Razor views. asp-for generates
+     the id, name, and value attributes from the model expression and also
+     hooks in validation attributes.
+
+================================================================================
+SECTION 18 — SECURITY SUMMARY
+================================================================================
+
+AUTHENTICATION:
+  JWT Bearer tokens on the API.
+  Cookie Auth on the MVC frontend (HttpOnly, Secure, SameSite=Lax).
+  Server-side session table allows forced logout (token revocation).
+
+AUTHORISATION:
+  [Authorize] — requires any authenticated user.
+  [Authorize(Roles = "0")] — admin only.
+  [Authorize(Roles = "0,2")] — admin or employer.
+  [AllowAnonymous] — explicit override (login, register, debug endpoints).
+  Resource-level checks in code: "if app.UserId != currentUserId return Forbid()"
+
+INPUT VALIDATION:
+  [Required], [EmailAddress], [MinLength], [MaxLength], [Url], [RegularExpression]
+  on DTO properties — validated automatically by [ApiController].
+  InputValidation.PhonePattern — shared regex constant.
+  File validation: extension whitelist + max 5 MB.
+
+CSRF PROTECTION:
+  [ValidateAntiForgeryToken] on all POST actions in the MVC app.
+  Not needed on the API because it uses JWT (not cookies) for auth.
+
+OPEN REDIRECT PREVENTION:
+  LocalRedirect() in AccountController.Login for returnUrl parameter.
+
+EMAIL ENUMERATION PREVENTION:
+  ForgotPassword always shows the same message regardless of whether the email
+  exists — prevents attackers from discovering valid emails.
+
+POTENTIAL PROFESSOR QUESTIONS:
+  Q: What is XSS and how is it mitigated here?
+  A: Cross-Site Scripting — injecting malicious JavaScript.
+     Mitigation: HttpOnly cookie (JS can't read the token), Razor's automatic
+     HTML-encoding of @Model values prevents reflected XSS in views.
+
+  Q: What is CSRF and how is it mitigated?
+  A: Cross-Site Request Forgery — a malicious site tricks your browser into
+     making an authenticated request (your cookies are sent automatically).
+     Mitigation: [ValidateAntiForgeryToken] checks a hidden form field that
+     only the legitimate form page can know. The API uses JWTs (not cookies),
+     so CSRF doesn't apply there (attacker can't set the Authorization header).
+
+================================================================================
+SECTION 19 — QUICK REFERENCE: HTTP STATUS CODES USED IN THIS PROJECT
+================================================================================
+
+  200 OK              — successful GET, successful update
+  201 Created         — successful POST (CreatedAtAction returns this)
+  204 No Content      — successful DELETE or update with no body
+  400 Bad Request     — invalid input (bad OpportunityId, validation error)
+  401 Unauthorized    — not authenticated or session invalid
+  403 Forbidden       — authenticated but not authorised (wrong role/owner)
+  404 Not Found       — resource doesn't exist
+  409 Conflict        — duplicate (already applied, already connected)
+  429 Too Many Requests — rate limit hit (Free plan limits)
+  500 Internal Server Error — unexpected exceptions
+
+================================================================================
+SECTION 20 — EXAM / INTERVIEW QUESTION BANK
+================================================================================
+
+ARCHITECTURE:
+  1. Explain the two-project architecture. Why does the MVC app call the API
+     instead of accessing the DB directly?
+  2. What pattern does the project use for DI lifetime management? Give examples.
+  3. What is the purpose of the Sessions table alongside JWTs?
+  4. How does the login flow work end-to-end (from form submit to cookie set)?
+  5. How does the MVC app pass the JWT to API requests?
+
+DATABASE:
+  6. Draw the relationships between Users, Companies, Opportunities,
+     JobApplications, and InterviewRounds.
+  7. Why are RequiredJobRoleIds stored as a comma-separated string?
+     What are the trade-offs vs a junction table?
+  8. What is the UNIQUE INDEX on the Connections table and why is it there?
+  9. What is the difference between LocationId (FK) and Location (text field)?
+  10. How are migrations applied at startup? What is the safety-net raw SQL for?
+
+AUTHENTICATION/SECURITY:
+  11. What is a JWT? What three parts does it have? What does each part contain?
+  12. What algorithm is used to sign JWTs in this project? Why is it symmetric?
+  13. How are passwords stored and verified?
+  14. What is CSRF? How does [ValidateAntiForgeryToken] prevent it?
+  15. Why is the JWT stored in an HttpOnly cookie in the MVC app?
+
+EF CORE:
+  16. What is the difference between .Include() and a new query?
+  17. What does SaveChangesAsync() do internally?
+  18. What is EntityState.Modified and when would you use it?
+  19. What is DbUpdateConcurrencyException and how is it handled?
+  20. What is .ExecuteUpdateAsync() and when should you use it?
+
+API DESIGN:
+  21. What HTTP method and status code is correct for a "duplicate application" error?
+  22. What is the difference between 401 Unauthorized and 403 Forbidden?
+  23. What is 429 Too Many Requests? When and why is it returned here?
+  24. What is the purpose of [ApiController] attribute?
+  25. What is CreatedAtAction() and what status code does it return?
+
+SIGNALR / REAL-TIME:
+  26. What is SignalR and when would you use it instead of regular HTTP?
+  27. How does a user "join" a chat room in the Hub?
+  28. Why is _userConnections a static field?
+  29. What is the difference between Clients.Group() and Clients.All()?
+  30. How does the "already have a Direct chat" idempotency check work?
+
+RAZOR / MVC:
+  31. What is the Post-Redirect-Get pattern and why use it?
+  32. What is the difference between TempData and ViewBag?
+  33. Why must type="checkbox" be explicit for a bool? field?
+  34. What does [ValidateAntiForgeryToken] do and where is it needed?
+  35. What is a Tag Helper? Give three examples from this project.
+
+MATCH SCORING:
+  36. Explain the F1 score formula. Why use it instead of just recall?
+  37. What does the MatchScoreHelper do for small vs large countries?
+  38. What weight does location have vs job roles? What if one is missing?
+
+SUBSCRIPTIONS:
+  39. How is the Free plan monthly application limit enforced?
+  40. Why use HTTP 429 for subscription limits rather than 403?
+
+================================================================================
+STUDY SCHEDULE SUGGESTION (one topic per session)
+================================================================================
+
+Day 1: Section 0 (overview) + Section 1 (full DB structure)
+Day 2: Section 2 (Program.cs, DI, startup) + Section 3 (auth flow)
+Day 3: Section 4 (base controllers) + Section 5 (job applications)
+Day 4: Section 6 (opportunities + match scoring) + Section 12 (services)
+Day 5: Section 7 (companies) + Section 8 (connections) + Section 10 (notifications)
+Day 6: Section 9 (SignalR / chat) — this is the most complex
+Day 7: Section 11 (MVC architecture) + Section 17 (Razor views)
+Day 8: Section 13-15 (profiles, interviews, subscriptions) + Section 16 (middleware)
+Day 9: Section 18 (security) + Section 19 (status codes)
+Day 10: Section 20 — answer ALL 40 questions out loud without looking at notes
+
+================================================================================
+END OF STUDY PLAN
+================================================================================
