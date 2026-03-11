@@ -134,9 +134,6 @@ namespace XcelerateLinks.Mvc.Controllers
             var payload = new APIPSI16.Models.DTOs.ApplyDto {
                 OpportunityId = model.Application.OpportunityId,
                 Name = model.Application.Name,
-                JobPosition = model.Application.JobPosition,
-                Experience = model.Application.Experience,
-                Skills = model.Application.Skills,
                 CoverLetter = model.Application.CoverLetter,
                 PhoneNumber = model.Application.PhoneNumber,
                 ProfessionalUrl = model.Application.ProfessionalUrl,
@@ -362,9 +359,6 @@ namespace XcelerateLinks.Mvc.Controllers
         {
             public int OpportunityId { get; set; }
             public string? Name { get; set; }
-            public string? JobPosition { get; set; }
-            public int? Experience { get; set; }
-            public string? Skills { get; set; }
             public string? CoverLetter { get; set; }
             public string? PhoneNumber { get; set; }
             public string? ProfessionalUrl { get; set; }
