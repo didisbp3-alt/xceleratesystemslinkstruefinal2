@@ -7,6 +7,9 @@ namespace APIPSI16.Models.DTOs
     {
         public int OpportunityId { get; set; }
         public string? Name { get; set; }
+        public string? JobPosition { get; set; }
+        public int? Experience { get; set; }
+        public string? Skills { get; set; }
         public string? CoverLetter { get; set; }
 
         [RegularExpression(InputValidation.PhonePattern, ErrorMessage = "Invalid phone number format.")]

@@ -243,7 +243,9 @@ public partial class xcleratesystemslinks_SampleDBContext : DbContext
                 .HasColumnType("datetime");
             entity.Property(e => e.UpdatedAt).HasColumnType("datetime");
             entity.Property(e => e.Name).HasMaxLength(50).IsUnicode(false);
-            entity.Property(e => e.PhoneNumber).HasMaxLength(20).IsUnicode(false);
+            entity.Property(e => e.PhoneNumber).HasMaxLength(20);
+            entity.Property(e => e.JobPosition).HasMaxLength(200);
+            entity.Property(e => e.Skills).HasMaxLength(500);
             entity.Property(e => e.ProfessionalUrl).HasMaxLength(300);
             entity.Property(e => e.PortfolioUrl).HasMaxLength(300);
             entity.Property(e => e.SelectedJobRoleIds).HasMaxLength(500);

@@ -140,6 +140,11 @@
                         <span asp-validation-for="Application.PhoneNumber" class="text-danger"></span>
                     </div>
                 </div>
+                <div class="form-group-styled">
+                    <label asp-for="Application.JobPosition">Posição / Cargo pretendido</label>
+                    <input asp-for="Application.JobPosition" class="form-control" placeholder="ex: Software Engineer, Product Manager..." maxlength="200" />
+                    <span asp-validation-for="Application.JobPosition" class="text-danger"></span>
+                </div>
                 <div class="field-row">
                     <div class="form-group-styled">
                         <label asp-for="Application.ProfessionalUrl">Professional Profile URL</label>
@@ -173,13 +178,29 @@
                         <span asp-validation-for="Application.YearsOfExperience" class="text-danger"></span>
                     </div>
                     <div class="form-group-styled">
-                        <label style="margin-bottom:0.75rem;">Preferências de trabalho</label>
-                        <div class="toggle-row">
-                            <input asp-for="Application.OpenToRemote"
-                                   class="toggle-input"
-                                   id="openRemote" />
-                            <label for="openRemote" class="toggle-label">Disponível para trabalho remoto</label>
-                        </div>
+                        <label asp-for="Application.Experience">Nível de experiência</label>
+                        <select asp-for="Application.Experience" class="form-select">
+                            <option value="">Seleciona...</option>
+                            <option value="0">Júnior</option>
+                            <option value="1">Médio</option>
+                            <option value="2">Sénior</option>
+                            <option value="3">Lead / Principal</option>
+                        </select>
+                        <span asp-validation-for="Application.Experience" class="text-danger"></span>
+                    </div>
+                </div>
+                <div class="form-group-styled">
+                    <label asp-for="Application.Skills">Competências principais</label>
+                    <input asp-for="Application.Skills" class="form-control" placeholder="ex: C#, .NET, SQL, React..." maxlength="500" />
+                    <span asp-validation-for="Application.Skills" class="text-danger"></span>
+                </div>
+                <div class="form-group-styled">
+                    <label style="margin-bottom:0.75rem;">Preferências de trabalho</label>
+                    <div class="toggle-row">
+                        <input asp-for="Application.OpenToRemote"
+                               class="toggle-input"
+                               id="openRemote" />
+                        <label for="openRemote" class="toggle-label">Disponível para trabalho remoto</label>
                     </div>
                 </div>
             </div>
