@@ -321,28 +321,11 @@ public partial class xcleratesystemslinks_SampleDBContext : DbContext
                 .HasColumnName("RequiredJobRoleIds")
                 .HasDefaultValue(null);
 
-            // These columns may be stored as nvarchar in the database.
-            // The converters ensure EF Core reads/writes them as strings, converting to/from byte?.
-            entity.Property(e => e.EmploymentType)
-                .HasConversion(
-                    v => v.HasValue ? v.Value.ToString() : (string)null,
-                    v => v == null ? (byte?)null : (byte?)Convert.ToByte(v));
-            entity.Property(e => e.SeniorityLevel)
-                .HasConversion(
-                    v => v.HasValue ? v.Value.ToString() : (string)null,
-                    v => v == null ? (byte?)null : (byte?)Convert.ToByte(v));
-            entity.Property(e => e.RemoteOption)
-                .HasConversion(
-                    v => v.HasValue ? v.Value.ToString() : (string)null,
-                    v => v == null ? (byte?)null : (byte?)Convert.ToByte(v));
-            entity.Property(e => e.OpportunityType)
-                .HasConversion(
-                    v => v.HasValue ? v.Value.ToString() : (string)null,
-                    v => v == null ? (byte?)null : (byte?)Convert.ToByte(v));
-            entity.Property(e => e.ApplicationScope)
-                .HasConversion(
-                    v => v.HasValue ? v.Value.ToString() : (string)null,
-                    v => v == null ? (byte?)null : (byte?)Convert.ToByte(v));
+            entity.Property(e => e.EmploymentType).HasColumnType("tinyint");
+            entity.Property(e => e.SeniorityLevel).HasColumnType("tinyint");
+            entity.Property(e => e.RemoteOption).HasColumnType("tinyint");
+            entity.Property(e => e.OpportunityType).HasColumnType("tinyint");
+            entity.Property(e => e.ApplicationScope).HasColumnType("tinyint");
 
             entity.HasOne(d => d.Company)
                 .WithMany(p => p.Opportunities)
