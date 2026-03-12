@@ -1749,6 +1749,335 @@ SUBSCRIPTIONS:
   40. Why use HTTP 429 for subscription limits rather than 403?
 
 ================================================================================
+SECTION 23 — Q&A ANSWER KEY  [read this AFTER attempting to answer from memory]
+================================================================================
+
+HOW TO USE:
+  Cover this page. Read each question from Section 20. Say the answer out loud.
+  Then uncover and compare. Only come HERE if you drew a blank.
+
+────────────────────────────────────────────────────────────────────────────────
+ARCHITECTURE
+────────────────────────────────────────────────────────────────────────────────
+
+Q1. Explain the two-project architecture. Why call the API instead of the DB directly?
+A:  There are two ASP.NET Core projects. APIPSI16 is the REST API — it owns all
+    business logic and talks to SQL Server via EF Core. XcelerateLinks is the MVC
+    frontend — it renders Razor views and calls the API over HTTP using
+    IHttpClientFactory. The DB is never exposed to the frontend. Separation of
+    concerns means the API can be updated or reused (e.g. by a mobile app) without
+    touching the frontend.
+
+Q2. What DI lifetimes are used? Give examples.
+A:  Three lifetimes:
+      Singleton  — one instance for the whole app lifetime.
+                   Example: ITokenService / TokenService (no DB context needed).
+      Scoped     — one instance per HTTP request.
+                   Example: ISessionService / SessionService (needs DbContext,
+                   which is itself Scoped — never inject Scoped into Singleton).
+      Transient  — new instance every time it is injected (rarely used here).
+
+Q3. What is the purpose of the Sessions table alongside JWTs?
+A:  JWTs are stateless — once issued, the server cannot cancel them before expiry.
+    The Sessions table adds server-side revocation. On logout, the row is set to
+    IsActive=false. Every API request then checks the Sessions table; if the session
+    is inactive the request is rejected (401) even though the JWT signature is still
+    mathematically valid. This makes logout actually work.
+
+Q4. How does the login flow work end-to-end?
+A:  1. User submits the login form → MVC POSTs credentials to POST /api/auth/login.
+    2. API: finds user by email or username, verifies password with PasswordHasher.
+    3. API: builds JWT (userId, username, role in payload), signs with HS256.
+    4. API: saves a Session row (Token, UserId, IsActive=true, ExpiresAt).
+    5. API: returns { token, expiresAt }.
+    6. MVC: saves the JWT in the HttpOnly "ApiAccessToken" cookie.
+    7. MVC: calls HttpContext.SignInAsync() to create the ASP.NET cookie identity.
+    8. MVC: redirects to the requested page (LocalRedirect).
+
+Q5. How does the MVC app pass the JWT to API requests?
+A:  The TokenHandler (a DelegatingHandler registered on the named HttpClient "Api")
+    intercepts every outgoing API call. It reads the "ApiAccessToken" cookie from
+    the current HttpContext and injects it as the Authorization: Bearer <token>
+    header. ApiControllerBase.CreateAuthorizedClient() does the same manually for
+    controllers that build their own clients.
+
+────────────────────────────────────────────────────────────────────────────────
+DATABASE
+────────────────────────────────────────────────────────────────────────────────
+
+Q6. Draw the relationships between Users, Companies, Opportunities, JobApplications,
+    and InterviewRounds.
+A:  Users ──< CompanyMembers >── Companies ──< Opportunities
+      │                                              │
+      └──────────< JobApplications >────────────────┘
+                        │
+                        └──< InterviewRounds
+    Also: Users ──< Sessions
+          Users ──< Connections >── Users  (self-join)
+          Users ──< Notifications
+          Users ──< ChatUsers >── Chat ──< ChatMessages
+
+Q7. Why are RequiredJobRoleIds stored as a comma-separated string?
+    What are the trade-offs?
+A:  It is a simplicity trade-off. A junction table (OpportunityJobRoles) would be
+    more normalised and support direct SQL JOINs, but requires extra migrations and
+    more complex queries. The comma-string is simpler to write and read. The cost:
+    filtering by role must be done in C# after loading data — no SQL WHERE on roles.
+
+Q8. What is the UNIQUE INDEX on the Connections table and why is it there?
+A:  UNIQUE INDEX on (RequesterUserId, AddresseeUserId). It prevents two Connection
+    rows between the same pair of users at the DB level. The code also checks for
+    an existing row in EITHER direction with AnyAsync() before inserting. The index
+    is the last line of defence against race conditions (two simultaneous requests
+    both passing the in-code check).
+
+Q9. What is the difference between LocationId (FK) and Location (text field)?
+A:  Location is a legacy free-text field (e.g. "Lisboa"). LocationId is a FK to
+    the structured Locations table, which also holds Region and CountryId. The
+    structured version lets MatchScoreHelper compare regions and countries precisely.
+    Both are kept for backward compatibility with older data.
+
+Q10. How are migrations applied at startup? What is the raw SQL safety-net for?
+A:  Program.cs calls ctx.Database.Migrate() on startup, which runs all pending
+    EF Core migrations. The raw SQL safety-net checks IF NOT EXISTS for specific
+    columns (PriorityId, IsDiscarded) on EmployerCandidateHistory that were added
+    outside of EF migrations and ALTERs the table if they are missing. It is a
+    pragmatic fallback to keep the schema consistent even if a migration was missed.
+
+────────────────────────────────────────────────────────────────────────────────
+AUTHENTICATION / SECURITY
+────────────────────────────────────────────────────────────────────────────────
+
+Q11. What is a JWT? What three parts does it have? What does each contain?
+A:  JWT = JSON Web Token. Three dot-separated Base64-URL-encoded parts:
+      Header    — algorithm and type: { "alg": "HS256", "typ": "JWT" }
+      Payload   — claims: userId (nameid), username (unique_name), role, expiry (exp)
+      Signature — HMAC-SHA256 of (header + "." + payload) using the secret key.
+    The payload is readable by anyone; the signature makes it tamper-proof.
+
+Q12. What algorithm signs JWTs here? Why is it symmetric?
+A:  HS256 (HMAC-SHA256). Symmetric means the SAME secret key is used both to sign
+    (at login) and to verify (on every API request). It is appropriate here because
+    the same server both issues and validates tokens. The key is stored base64-encoded
+    in an environment variable (XCELERATE_JWT_KEY) so it is never in source code.
+
+Q13. How are passwords stored and verified?
+A:  ASP.NET Core's PasswordHasher<T> uses PBKDF2 with HMAC-SHA512, a random salt,
+    and 10,000 iterations. The result is stored in Users.PasswordHash as a base64
+    string. On login, VerifyHashedPassword() extracts the stored salt, re-derives
+    the hash from the supplied password, and compares. SuccessRehashNeeded means
+    the parameters have been updated and the hash should be re-saved with the new
+    settings.
+
+Q14. What is CSRF? How does [ValidateAntiForgeryToken] prevent it?
+A:  CSRF (Cross-Site Request Forgery): a malicious page tricks the browser into
+    submitting a form to this site, because the browser automatically sends cookies
+    with every request. [ValidateAntiForgeryToken] requires a hidden form field
+    (_RequestVerificationToken) that ASP.NET generates per session. A cross-site
+    request cannot know this token, so the check fails. The API does not need it
+    because it uses JWTs (not cookies), so an attacker cannot set the Authorization
+    header from another origin.
+
+Q15. Why is the JWT stored in an HttpOnly cookie in the MVC app?
+A:  Storing it in localStorage would expose it to JavaScript — any XSS attack could
+    steal it. An HttpOnly cookie is never accessible to JavaScript; only the browser
+    sends it (automatically on every request). Combined with Secure (HTTPS only) and
+    SameSite=Lax (not sent on cross-site POSTs), this protects the token from both
+    XSS theft and CSRF.
+
+────────────────────────────────────────────────────────────────────────────────
+EF CORE
+────────────────────────────────────────────────────────────────────────────────
+
+Q16. What is the difference between .Include() and a new query?
+A:  .Include(x => x.NavProp) generates a SQL JOIN and retrieves the related entity
+    in the same database round-trip. A separate query means a second round-trip.
+    Doing it inside a loop creates the N+1 problem — one extra query per parent row.
+    Use .Include() when you always need the related data to avoid N+1 issues.
+
+Q17. What does SaveChangesAsync() do internally?
+A:  It takes all entities tracked by the DbContext that are in Added, Modified, or
+    Deleted state, generates the corresponding INSERT/UPDATE/DELETE SQL, and runs
+    them in a single database transaction. If any statement fails, the whole batch
+    is rolled back automatically.
+
+Q18. What is EntityState.Modified and when would you use it?
+A:  Setting _context.Entry(entity).State = EntityState.Modified tells EF that ALL
+    properties have changed, generating an UPDATE for every column. Used in
+    UpdateCompany() where the whole entity is replaced. More efficient alternative:
+    mark only specific properties as modified to generate a narrower UPDATE statement
+    (avoids overwriting unchanged columns).
+
+Q19. What is DbUpdateConcurrencyException and how is it handled here?
+A:  Thrown when an EF UPDATE affects 0 rows — typically because another request
+    deleted or modified the row between the GET and the PUT (optimistic concurrency).
+    In UpdateCompany(): if CompanyExists() returns false, return 404 (the company
+    was deleted). Otherwise re-throw as an unhandled exception (500).
+
+Q20. What is .ExecuteUpdateAsync() and when should you use it?
+A:  Translates directly to a single SQL UPDATE statement without loading any entities
+    into the EF change tracker. Used in ChatController to mark all messages in a chat
+    as read. Far more efficient than loading hundreds of message objects, setting
+    ReadAt on each, and calling SaveChangesAsync() — especially for bulk operations.
+
+────────────────────────────────────────────────────────────────────────────────
+API DESIGN
+────────────────────────────────────────────────────────────────────────────────
+
+Q21. What HTTP method and status code for a "duplicate application" error?
+A:  POST with 409 Conflict. The resource — a job application for this specific
+    (user, opportunity) pair — already exists, so the operation conflicts with the
+    current state of the resource.
+
+Q22. What is the difference between 401 Unauthorized and 403 Forbidden?
+A:  401 Unauthorized — the request has no valid authentication (token missing,
+    invalid, or session inactive). "Who are you? I don't know you."
+    403 Forbidden — the user IS authenticated but lacks permission (wrong role,
+    or trying to edit another user's data). "I know who you are, but no."
+
+Q23. What is 429 Too Many Requests? When and why is it returned here?
+A:  Returned when a Free plan user hits their quota: 5 job applications per calendar
+    month, or 50 accepted connections. It signals a temporary limit, not a permanent
+    denial (compare with 403 which means permanently forbidden). The client knows
+    they can retry after upgrading their plan.
+
+Q24. What is the purpose of the [ApiController] attribute?
+A:  It automatically validates ModelState (returns 400 Bad Request if validation
+    annotations fail, without needing `if (!ModelState.IsValid)` in every action).
+    It also enables attribute routing inference and better binding source inference
+    (body vs route vs query string params).
+
+Q25. What is CreatedAtAction() and what status code does it return?
+A:  CreatedAtAction() returns HTTP 201 Created. It also sets the Location response
+    header to the URL of the newly created resource, constructed from the referenced
+    GET action name and route values. This follows the REST convention: a successful
+    POST should return 201 + a Location pointing to the new resource.
+
+────────────────────────────────────────────────────────────────────────────────
+SIGNALR / REAL-TIME
+────────────────────────────────────────────────────────────────────────────────
+
+Q26. What is SignalR and when would you use it instead of regular HTTP?
+A:  SignalR is a library that provides a persistent, bidirectional connection between
+    browser and server, using WebSockets as the primary transport (falling back to
+    Server-Sent Events or Long Polling). HTTP is request-response — the server can
+    only respond when the client asks. SignalR lets the server PUSH data to clients
+    at any time. Use it when data must be delivered instantly (chat, online status,
+    notifications) and polling would be too slow or wasteful.
+
+Q27. How does a user "join" a chat room in the Hub?
+A:  In OnConnectedAsync(), the hub queries the ChatUsers table to find all chats the
+    user is a member of. For each chat, it calls:
+      Groups.AddToGroupAsync(Context.ConnectionId, "chat_{chatId}")
+    Any message broadcast to "chat_5" is then delivered to all connected tabs of all
+    participants of that chat.
+
+Q28. Why is _userConnections a static field?
+A:  Hub instances are created fresh per connection (transient lifecycle). A static
+    field is shared across ALL hub instances in the process, so it persists as
+    connections come and go. Without static, each connection would see an empty
+    dictionary. ConcurrentDictionary is used for thread-safety because multiple
+    connections can read/write simultaneously.
+
+Q29. What is the difference between Clients.Group() and Clients.All()?
+A:  Clients.All() sends to every connected SignalR client on the entire server.
+    Clients.Group("chat_5") sends only to connections that have been added to that
+    named group — i.e. participants of chat 5. This project uses Groups everywhere
+    to scope messages to only the relevant users.
+
+Q30. How does the "already have a Direct chat" idempotency check work?
+A:  POST /api/chat/with-participants first checks the DB: is there already a Direct
+    (2-person) chat containing exactly the same two participants? If yes, it returns
+    the existing chatId instead of creating a new one. This makes "start a chat"
+    safe to click multiple times — the same chat is always returned.
+
+────────────────────────────────────────────────────────────────────────────────
+RAZOR / MVC
+────────────────────────────────────────────────────────────────────────────────
+
+Q31. What is the Post-Redirect-Get pattern and why use it?
+A:  After a successful form POST, instead of rendering a view directly, the server
+    redirects the browser to a GET action. This prevents the browser from resubmitting
+    the form when the user presses F5 (which would re-POST). TempData is used to pass
+    a success message across the redirect because ViewBag does not survive redirects.
+
+Q32. What is the difference between TempData and ViewBag?
+A:  TempData["X"] is stored server-side (session/cookie) and survives exactly one
+    redirect — it is cleared after being read. Used for POST-Redirect-Get messages.
+    ViewBag.X is a dynamic dictionary valid only for the current request/response
+    cycle — used to pass data from the current controller action to the view it
+    renders directly.
+
+Q33. Why must type="checkbox" be explicit for a bool? field?
+A:  Without type="checkbox", asp-for renders a text input. A text input sends an
+    empty string when blank and "on" when checked — neither of which binds to bool?.
+    With type="checkbox", the browser sends "true" when checked and nothing (or the
+    hidden input "false") when unchecked. The model binder then correctly converts
+    "true"/"false" to bool?.
+
+Q34. What does [ValidateAntiForgeryToken] do and where is it needed?
+A:  On every POST action in the MVC app, it validates the hidden
+    _RequestVerificationToken field that the form generated with @Html.AntiForgeryToken()
+    or the asp- tag helpers. If the token is missing or wrong, the request is rejected
+    with 400 Bad Request. Prevents CSRF attacks. NOT needed on the API because the
+    API uses JWT Bearer tokens (not cookies) for authentication.
+
+Q35. What is a Tag Helper? Give three examples from this project.
+A:  Tag Helpers are server-side components that augment HTML elements in Razor views.
+    They run at render time and modify the output HTML.
+    Three examples:
+      asp-for           — generates id, name, value from model expression + hooks up validation
+      asp-controller + asp-action — builds correct href using MVC routing
+      asp-route-id      — appends a route parameter (e.g. /opportunities/42) to a link
+
+────────────────────────────────────────────────────────────────────────────────
+MATCH SCORING
+────────────────────────────────────────────────────────────────────────────────
+
+Q36. Explain the F1 score formula. Why use it instead of just recall?
+A:  F1 = 2 * matchCount / (userPrefCount + requiredRoleCount) * 100
+    matchCount = job roles that appear in BOTH the user's preferences AND the
+    job's required roles.
+    Using only recall (matchCount / requiredRoleCount) gives 100% if a user lists
+    every possible role — it rewards over-listing. F1 is the harmonic mean of
+    precision (how relevant the user's choices are) and recall (how much of the
+    job they cover). It penalises both over-listing and under-listing.
+
+Q37. What does MatchScoreHelper do for small vs large countries?
+A:  ComputeLocationScore() distinguishes small compact countries (Portugal, Netherlands,
+    Belgium, etc. — a HashSet for O(1) lookup) from large countries (US, Canada,
+    Brazil). For a small country, a different region still scores 35 (still fairly
+    close). For a large country, a different region scores 0 (effectively a different
+    job market). Same region scores 65 (small country) or 50 (large country).
+    Exact LocationId match = 100. Different country = 0. No data = -1 (excluded).
+
+Q38. What weight does location have vs job roles? What if one is missing?
+A:  WeightedScore = roleScore * 0.7 + locationScore * 0.3
+    If the opportunity has NO required roles → only locationScore is used (weight 1.0).
+    If there is NO location data (score = -1) → only roleScore is used (weight 1.0).
+    The missing component is excluded and the remaining component takes the full weight.
+
+────────────────────────────────────────────────────────────────────────────────
+SUBSCRIPTIONS
+────────────────────────────────────────────────────────────────────────────────
+
+Q39. How is the Free plan monthly application limit enforced?
+A:  In JobApplicationsController.Apply():
+      if (user.SubscriptionPlan == 0)  // Free plan
+    It counts rows in JobApplications where UserId == uid AND
+      AppliedAt >= new DateTime(UtcNow.Year, UtcNow.Month, 1, 0,0,0, Utc)
+    (i.e. the first day of the current month in UTC).
+    If the count is >= 5, return 429 Too Many Requests.
+    The same pattern enforces the 50-connection limit in ConnectionsController.
+
+Q40. Why use HTTP 429 for subscription limits rather than 403?
+A:  403 Forbidden means permanently not allowed — wrong role or permission. It
+    implies the user can NEVER do this. 429 Too Many Requests signals a quota/rate
+    limit that is temporary — the user CAN do this in principle, but not right now
+    on their current plan. It semantically communicates "try again after upgrading"
+    rather than "this is always denied."
+
+================================================================================
 SECTION 21 — MULTI-DAY SCHEDULE  [only if you have more than 8 hours]
 ================================================================================
 
