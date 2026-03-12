@@ -45,104 +45,238 @@
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  HOUR 2  (1:00–2:00) — AUTHENTICATION (most likely to be asked)            │
-│  Sections to read: 3 and 4                                                 │
-│  File: APIPSI16/Controllers/AuthController.cs                              │
-│        APIPSI16/Services/TokenService.cs                                   │
-│        APIPSI16/Services/SessionService.cs                                 │
+│  HOUR 2  (1:00–2:00) — HOW JWT + COOKIES WORK ON THIS SITE                │
+│  + LOGIN / LOGOUT / REGISTER FLOWS                                         │
+│  Sections to read: 3 and 11 (just the login/logout methods)               │
+│  Files: APIPSI16/Controllers/AuthController.cs  (Login, Register, Logout) │
+│         XcelerateLinks/Controllers/AccountController.cs  (Login, Logout)  │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  WHAT TO DO:                                                                │
-│  1. Open AuthController.cs. Read Login() method line by line (30 min).    │
-│     Write the 7-step login flow in your own words:                        │
-│       1. Normalize username to lowercase                                   │
-│       2. Find user by email OR username in DB                              │
-│       3. VerifyHashedPassword → Failed / Success / SuccessRehashNeeded    │
-│       4. Invalidate all previous active sessions (Sessions table)         │
-│       5. Build Claims[] (Name, NameIdentifier=userId, Role)               │
-│       6. TokenService.CreateToken() → JWT string                          │
-│       7. SessionService.CreateSessionAsync() → INSERT Sessions row        │
-│       8. Return { token, expiresAt }                                       │
-│  2. Read TokenService.cs (10 min) — focus on:                             │
-│       - Convert.FromBase64String(keyBase64) → SymmetricSecurityKey        │
-│       - JwtSecurityToken(issuer, audience, claims, expires, creds)        │
-│       - JwtSecurityTokenHandler().WriteToken(token)                       │
-│  3. Read SessionService.cs (10 min) — focus on:                           │
-│       - CreateSessionAsync: invalidates old sessions FIRST, then inserts  │
-│       - IsSessionValidAsync: checks IsActive=true AND ExpiresAt > now     │
-│       - InvalidateSessionAsync: sets IsActive=false (for logout)          │
-│  4. Read Register() in AuthController — note the role-forcing logic:      │
-│       If caller is NOT admin (role != "0") → force role to 1 (User)       │
+│  THE SIMPLE STORY — JWT + COOKIES ON THIS SITE (memorise this first)      │
+│  ─────────────────────────────────────────────────────────────────────── │
+│                                                                             │
+│  WHAT IS A JWT?                                                             │
+│    A JWT (JSON Web Token) is a string the server creates when you log in.  │
+│    It has 3 parts separated by dots:  Header.Payload.Signature             │
+│      Header   — says which algorithm was used (HS256 here)                │
+│      Payload  — holds your info: userId, username, role, expiry time      │
+│      Signature — proves the server made it (HMAC with a secret key)       │
+│    Anyone can read the Payload (it's just Base64). The Signature stops    │
+│    anyone from faking or modifying it.                                     │
+│                                                                             │
+│  WHAT IS A COOKIE?                                                          │
+│    A cookie is a small piece of data the server tells the browser to save. │
+│    On this site the JWT itself is saved inside a cookie called             │
+│    "ApiAccessToken". The key security settings:                            │
+│      HttpOnly = true  → JavaScript cannot read it  (prevents XSS theft)  │
+│      Secure = true    → browser only sends it over HTTPS                  │
+│      SameSite = Lax   → browser won't send it on cross-site POSTs (CSRF) │
+│      Expires = 1 hour → cookie (and JWT) expire after 1 hour             │
+│                                                                             │
+│  HOW THEY WORK TOGETHER ON EVERY REQUEST:                                 │
+│    1. You log in → API creates a JWT → MVC saves it in the cookie.        │
+│    2. You visit any page → browser sends the cookie automatically.        │
+│    3. MVC reads the JWT from the cookie → attaches it as                  │
+│       "Authorization: Bearer <token>" header when calling the API.        │
+│    4. API validates the JWT signature and checks the Sessions table.      │
+│    5. If valid → request proceeds. If not → 401 Unauthorized.            │
+│                                                                             │
+│  ─────────────────────────────────────────────────────────────────────── │
+│  USER FLOWS TO TRACE IN THE CODE:                                          │
+│  ─────────────────────────────────────────────────────────────────────── │
+│                                                                             │
+│  REGISTER (new account):                                                   │
+│    User fills form → POST AccountController.Register (MVC)                │
+│      → calls POST /api/auth/register                                       │
+│      → AuthController.Register hashes password, saves to Users table      │
+│      → role is forced to 1 (User) unless caller is admin                  │
+│      → returns 201 Created                                                 │
+│    MVC redirects to login page                                             │
+│                                                                             │
+│  LOGIN:                                                                    │
+│    User fills login form → POST AccountController.Login (MVC)             │
+│      → calls POST /api/auth/login                                          │
+│      → API: finds user by email OR username, verifies password hash       │
+│      → API: creates JWT (userId + username + role inside)                 │
+│      → API: saves Session row in Sessions table (so logout works)         │
+│      → API: returns { token, expiresAt } to MVC                          │
+│    MVC: saves JWT in "ApiAccessToken" HttpOnly cookie                     │
+│    MVC: also signs in with ASP.NET cookie auth (for [Authorize] on views) │
+│    MVC: redirects to home page (or the page they were trying to reach)   │
+│                                                                             │
+│  LOGOUT:                                                                   │
+│    User clicks Logout → POST AccountController.Logout (MVC)               │
+│      → reads "ApiAccessToken" cookie, calls API to mark session inactive  │
+│      → deletes the cookie from browser                                    │
+│      → signs out the ASP.NET cookie auth                                  │
+│      → redirects to home                                                  │
+│                                                                             │
+│  ── QUICK NOTE ON PROGRAM.CS (skim, don't memorise) ──                   │
+│    Program.cs just WIRES everything up at startup. If asked:              │
+│    • Middleware order: Authentication BEFORE Authorization                 │
+│    • JWT is validated on every API request (signature + expiry checked)   │
+│    • Sessions table is checked AFTER JWT validation                       │
+│    That's all you need to know about Program.cs for this exam.            │
 │                                                                             │
 │  QUESTIONS TO ANSWER OUT LOUD BEFORE MOVING ON:                           │
-│   • What is a JWT? What 3 parts? (Header.Payload.Signature)               │
-│   • Why is there a Sessions TABLE if JWTs are already signed?             │
-│   • What does SuccessRehashNeeded mean?                                    │
-│   • What is PBKDF2? What is a salt?                                        │
+│   • What are the 3 parts of a JWT? What's in the payload on this site?   │
+│   • Why is the JWT stored in a cookie instead of localStorage?            │
+│   • What happens step by step when you log in to this site?               │
+│   • What happens when you log out? Where is the token removed?            │
+│   • Why does the site also have a Sessions table? What extra check does   │
+│     it give beyond the JWT signature?                                      │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  HOUR 3  (2:00–3:00) — PROGRAM.CS + DI CONTAINER                          │
-│  Section to read: 2                                                        │
-│  File: APIPSI16/Program.cs                                                 │
+│  HOUR 3  (2:00–3:00) — CORE SITE FLOWS (what happens on the website)      │
+│  Sections to read: 5, 6, 8, 9, 10, 11 (skim each quickly)                │
+│  Goal: trace every main action a user does, end to end                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  WHAT TO DO:                                                                │
-│  1. Open Program.cs. Read top-to-bottom (30 min). Write:                  │
-│     builder.Services.AddSingleton<ITokenService, TokenService>()          │
-│       → ONE instance for app lifetime                                      │
-│     builder.Services.AddScoped<ISessionService, SessionService>()         │
-│       → ONE per HTTP request (needs DbContext so must be Scoped)           │
-│     builder.Services.AddDbContext<...>()                                  │
-│       → SCOPED by default — never inject into Singleton!                  │
+│  Write each flow as a short story — controller → API → DB table.          │
+│  These are the scenarios most likely to come up in the Q&A.               │
+│  ─────────────────────────────────────────────────────────────────────── │
 │                                                                             │
-│  2. Write the JWT validation parameters from memory:                      │
-│     ValidateIssuerSigningKey = true                                        │
-│     ValidateIssuer = true                                                  │
-│     ValidateAudience = true                                                │
-│     ValidateLifetime = true                                                │
-│     ClockSkew = TimeSpan.FromSeconds(30)                                  │
+│  1. BROWSE JOB LISTINGS                                                    │
+│     MVC: GET OpportunitiesController.Index                                 │
+│       → GET /api/opportunities?search=...&type=...&location=...           │
+│       → API queries Opportunities table (+ Company JOIN)                  │
+│       → if logged in: calculates a MatchScore for each job                │
+│             MatchScore = 70% role fit + 30% location fit                  │
+│             (role fit uses F1 score formula — overlap between user prefs  │
+│              and job requirements)                                         │
+│       → returns list sorted by match score (best fit first)              │
+│     View shows job cards; logged-in users see a % match badge             │
 │                                                                             │
-│  3. Write the middleware pipeline ORDER (order matters for exam!):        │
-│     UseHttpsRedirection → UseStaticFiles → UseCors →                      │
-│     UseAuthentication → UseAuthorization → MapControllers                 │
-│     (Authentication BEFORE Authorization — always)                        │
+│  2. APPLY FOR A JOB                                                        │
+│     MVC: GET OpportunitiesController.Apply(id) → shows apply form        │
+│     MVC: POST OpportunitiesController.Apply(id, form data)                │
+│       → POST /api/job-applications/apply                                  │
+│       → API checks: already applied? → 409 Conflict (can't apply twice) │
+│       → API checks: Free plan AND already applied 5+ times this month?   │
+│                       → 429 Too Many Requests                             │
+│       → API inserts row in JobApplications table (Status = 0 = Applied)  │
+│       → API sends notification to the employer (best-effort, won't fail  │
+│            the application if notification fails)                         │
+│       → 201 Created returned to MVC                                       │
+│     MVC: shows success message                                             │
+│     Application status pipeline: 0=Applied → 1=Review → 2=Interview      │
+│                                   → 3=Offer → 4=Hired / 5=Rejected       │
 │                                                                             │
-│  4. Read the startup diagnostics block — ctx.Database.Migrate() and the   │
-│     raw SQL safety-net for EmployerCandidateHistory columns.              │
+│  3. VIEW / EDIT YOUR PROFILE                                               │
+│     MVC: GET ProfileController.MyProfile                                  │
+│       → GET /api/profile/{userId}                                         │
+│       → API fetches Users + ProfileEducations + ProfileExperiences        │
+│                + UserSkills + Skills tables                               │
+│     To edit: PUT /api/profile  → updates Users table                     │
+│     Add education: POST /api/profile/education → ProfileEducations table  │
+│     Add experience: POST /api/profile/experience → ProfileExperiences     │
+│     Add skill: POST /api/profile/skills → UserSkills table               │
+│     Upload photo: POST /api/profile/picture → saves file, updates        │
+│                    ProfilePictureUrl in Users table                       │
 │                                                                             │
-│  QUESTIONS TO ANSWER OUT LOUD:                                             │
-│   • Singleton vs Scoped vs Transient — give one example of each           │
-│   • Why is the JWT key stored as Base64?                                   │
-│   • What happens if UseAuthentication comes AFTER UseAuthorization?       │
-│   • What does ctx.Database.Migrate() do at startup?                       │
+│  4. SEND A CONNECTION REQUEST                                              │
+│     MVC: user clicks "Connect" on someone's profile                       │
+│       → POST /api/connections/request  { addresseeUserId: X }            │
+│       → API checks: requesting yourself? → 400 Bad Request               │
+│       → API checks: already connected or pending? → 409 Conflict        │
+│       → API checks: already have 50 pending requests? → 429             │
+│       → inserts Connection row (Status = 0 = Pending)                    │
+│       → inserts Notification for the target user                         │
+│       → 201 Created                                                        │
+│                                                                             │
+│  5. ACCEPT A CONNECTION REQUEST                                            │
+│     MVC: user sees pending request in Connections page                    │
+│       → POST /api/connections/{connectionId}/accept                      │
+│       → API: sets Connection.Status = 1 (Accepted), AcceptedAt = now    │
+│       → API: sends notification back to requester                        │
+│       → 200 OK                                                             │
+│     Now both users can see each other in their connections list and chat  │
+│                                                                             │
+│  6. SEND A CHAT MESSAGE                                                    │
+│     IMPORTANT: chat uses SignalR, NOT normal HTTP                         │
+│     Browser connects to /hubs/chat (a persistent WebSocket connection)   │
+│     User types and clicks send → browser calls hub.SendMessage(chatId,   │
+│              message text) via the WebSocket                              │
+│       → ChatHub.SendMessage: checks user is a participant in that chat   │
+│       → saves ChatMessage row to DB (ChatMessages table)                 │
+│       → broadcasts message to everyone in "chat_{chatId}" SignalR group  │
+│          (all open tabs of all participants see it instantly)             │
+│     Typing indicator: hub.TypingIndicator() → others in chat see it     │
+│     Read receipts: hub.MarkMessageAsRead() → sets ReadAt in DB,          │
+│          notifies the original sender                                     │
+│                                                                             │
+│  7. VIEW NOTIFICATIONS                                                     │
+│     MVC: GET NotificationsController.Index                                │
+│       → GET /api/notifications  → queries Notifications table            │
+│          (WHERE UserId = me, ordered by CreatedAt DESC)                   │
+│     Mark as read: PUT /api/notifications/{id}/read                       │
+│       → sets IsRead = true                                                │
+│     Unread count shown in navbar (polled or pushed via SignalR)          │
+│                                                                             │
+│  8. EMPLOYER POSTS A JOB                                                  │
+│     Must have Role = 2 (Employer) and be a CompanyMember                 │
+│     MVC: POST OpportunitiesController.Create                              │
+│       → POST /api/opportunities                                           │
+│       → [Authorize(Roles="0,2")] gate on API                             │
+│       → API: inserts Opportunities row (CreatorID = employer's userId,   │
+│              CompanyID = their company)                                   │
+│       → 201 Created                                                        │
+│                                                                             │
+│  9. EMPLOYER REVIEWS APPLICATIONS                                         │
+│     MVC: GET JobApplicationsController.CompanyApplications(companyId)    │
+│       → GET /api/job-applications/company/{companyId}                    │
+│       → API: checks caller is a CompanyMember of that company            │
+│       → returns list of JobApplications with applicant info              │
+│     Change application status:                                            │
+│       → PUT /api/job-applications/{id}/status { status: 2 }             │
+│       → API: updates Status column, sends notification to applicant      │
+│     Schedule interview:                                                   │
+│       → POST /api/interview-rounds { jobApplicationId, scheduledAt }    │
+│       → API: inserts InterviewRound row, notifies applicant              │
+│                                                                             │
+│  10. COMPANY MANAGEMENT                                                    │
+│      Create company: POST /api/companies → inserts Companies row         │
+│      Invite member: POST /api/companies/{id}/members                     │
+│        → caller must be Role=2 AND CompanyMember.Role >= 3 (CompanyAdmin)│
+│        → inserts CompanyMembers row for the invited user                 │
+│      Update company: PUT /api/companies/{id} → updates Companies row     │
+│                                                                             │
+│  QUESTIONS TO ANSWER OUT LOUD BEFORE MOVING ON:                          │
+│   • Walk me through what happens when a user applies for a job.           │
+│   • What stops a free-plan user applying to unlimited jobs?               │
+│   • What stops someone applying to the same job twice?                   │
+│   • What is SignalR and why is it used for chat instead of normal HTTP?   │
+│   • What is the connection between Connections and the chat feature?      │
+│   • What roles exist and what can each one do?                            │
+│   • What happens when an employer changes an application status?          │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  HOUR 4  (3:00–4:00) — JOB APPLICATIONS + OPPORTUNITIES                   │
+│  HOUR 4  (3:00–4:00) — DEEPER: JOB APPLICATIONS + MATCH SCORING           │
+│  (you already know the high-level flow from Hour 3 — go deeper here)      │
 │  Sections to read: 5 and 6                                                 │
 │  Files: APIPSI16/Controllers/JobApplicationsController.cs                 │
-│         APIPSI16/Controllers/OpportunitiesController.cs                   │
 │         APIPSI16/Services/MatchScoreHelper.cs                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  WHAT TO DO:                                                                │
-│  1. Read JobApplicationsController.Apply() (20 min). Write:               │
+│  1. Open JobApplicationsController.Apply() and read it fully (20 min).   │
+│     Can now explain every line of the apply logic:                        │
 │     Step 1: duplicate check → 409 Conflict                                │
 │     Step 2: Free plan limit (5/month) → 429 Too Many Requests            │
 │     Step 3: new JobApplication { ... } + SaveChangesAsync()              │
-│     Step 4: best-effort notification (try/catch, won't roll back)         │
+│     Step 4: best-effort notification (try/catch — won't roll back apply) │
 │     The [Column("LinkedInUrl")] attribute maps ProfessionalUrl → DB col   │
 │                                                                             │
-│  2. Read ApplyDto — note validation annotations:                          │
-│     [Url] on ProfessionalUrl and PortfolioUrl                             │
-│     [MaxLength(300)]                                                       │
-│     bool? OpenToRemote (checkbox issue — must use type="checkbox")        │
-│                                                                             │
-│  3. Read MatchScoreHelper.cs (20 min). Write the formulas:               │
+│  2. Read MatchScoreHelper.cs (20 min). Write the formulas:               │
 │     RoleScore = 2 * matchCount / (userPrefCount + requiredRoleCount) * 100│
-│       (this is the F1 score — harmonic mean of precision + recall)        │
+│       (this is the F1 score — balances precision AND recall)              │
 │     LocationScore = 100 exact / 65 small-country same-region /            │
 │                     35 small-country diff-region / 50 large same-region / │
 │                     0 diff-country  /  -1 no data                         │
 │     WeightedScore = roleScore*0.7 + locationScore*0.3                     │
+│                                                                             │
+│  3. Read the ApplyDto validation annotations (5 min):                    │
+│     [Url] on ProfessionalUrl/PortfolioUrl,  [MaxLength(300)],            │
+│     bool? OpenToRemote — must use type="checkbox" in the Razor view      │
 │                                                                             │
 │  QUESTIONS TO ANSWER OUT LOUD:                                             │
 │   • What status code for applying twice to same job?                      │
@@ -152,7 +286,8 @@
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  HOUR 5  (4:00–5:00) — SIGNALR CHAT + CONNECTIONS                         │
+│  HOUR 5  (4:00–5:00) — DEEPER: SIGNALR CHAT + CONNECTIONS                 │
+│  (you already know the high-level flow from Hour 3 — go deeper here)      │
 │  Sections to read: 9 and 8                                                 │
 │  Files: APIPSI16/Hubs/ChatHub.cs                                          │
 │         APIPSI16/Controllers/ConnectionsController.cs                     │
@@ -169,11 +304,9 @@
 │     - MarkMessageAsRead: sets ReadAt → notifies sender via user group     │
 │     - TypingIndicator: Clients.OthersInGroup() (excludes caller)         │
 │                                                                             │
-│  2. Read ConnectionsController.cs (15 min). Write:                       │
-│     POST /request  → check self, check duplicate, check 50-limit,        │
-│                       INSERT Connection (Status=0), INSERT Notification   │
-│     POST /{id}/accept → Status=1, AcceptedAt=now, send notification back  │
-│     GET /my-with-users → single .Join() query, avoids N+1               │
+│  2. Read ConnectionsController.cs (15 min). Confirm the business rules   │
+│     you already know from Hour 3, plus look at:                          │
+│     GET /my-with-users → single .Join() query, avoids N+1 problem       │
 │     GET /pending → Status=0 where AddresseeUserId==me                    │
 │                                                                             │
 │  QUESTIONS TO ANSWER OUT LOUD:                                             │
@@ -181,111 +314,116 @@
 │   • Why is _userConnections static?                                        │
 │   • What is a SignalR Group and how do you broadcast to one?              │
 │   • What is an N+1 query problem? How does .Join() fix it?               │
-│   • How does the UNIQUE INDEX on Connections prevent race conditions?     │
+│   • How does the UNIQUE INDEX on Connections prevent duplicate requests?  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  HOUR 6  (5:00–6:00) — MVC FRONTEND + SECURITY                            │
-│  Sections to read: 11, 17, and 18                                          │
+│  HOUR 6  (5:00–6:00) — MVC FRONTEND + PROFILE + EMPLOYER SIDE             │
+│  Sections to read: 11, 13, 14                                              │
 │  Files: XcelerateLinks/Controllers/AccountController.cs                   │
-│         XcelerateLinks/Controllers/ApiControllerBase.cs                   │
+│         XcelerateLinks/Controllers/ProfileController.cs (if it exists)    │
+│         APIPSI16/Controllers/InterviewRoundsController.cs                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  WHAT TO DO:                                                                │
-│  1. Read AccountController.Login (POST) (20 min). Write the 6 steps:     │
-│     1. POST to /api/auth/login → get JWT                                  │
-│     2. JwtSecurityTokenHandler().ReadJwtToken() — parses WITHOUT verify   │
-│     3. SessionService.CreateSessionAsync() on MVC side too               │
-│     4. Response.Cookies.Append(CookieName, token, HttpOnly+Secure)        │
-│     5. HttpContext.SignInAsync() with cookie claims identity              │
-│     6. LocalRedirect(returnUrl) — NOT Redirect() — prevents open redirect │
+│  1. MVC account flows — AccountController (20 min):                       │
+│     Login (POST): MVC → API → get JWT → save in HttpOnly cookie →        │
+│          also sign in with ASP.NET cookie → redirect home                 │
+│     Logout: delete cookie → invalidate session in DB via API              │
+│     ForgotPassword: generates reset token, emails it; same message shown  │
+│          whether email exists or not (prevents email enumeration)         │
+│     Register: MVC form → API → creates user, role forced to 1            │
 │                                                                             │
-│  2. Read ForgotPassword flow (10 min):                                    │
-│     - GeneratePasswordResetToken → in-memory token with expiry            │
-│     - Same message shown whether email exists or not → prevents           │
-│       EMAIL ENUMERATION attack                                             │
-│     - ResetPassword calls /api/auth/reset-password                        │
+│  2. Profile flows (15 min):                                               │
+│     Read + display: GET /api/profile/{id}                                 │
+│          → Users + Education + Experience + Skills joined                 │
+│     Edit bio/details: PUT /api/profile                                    │
+│     Add education: POST /api/profile/education                            │
+│     Add experience: POST /api/profile/experience                          │
+│     Add skill: POST /api/profile/skills                                   │
+│     Profile photo: POST /api/profile/picture (max 5 MB, whitelist types) │
+│     IsOpenToWork toggle: PUT /api/profile/open-to-work                   │
 │                                                                             │
-│  3. Write the security checklist from Section 18 (15 min):               │
-│     ✓ JWT Bearer on API                                                   │
-│     ✓ HttpOnly cookie on MVC (JS can't steal the token → XSS mitigation) │
-│     ✓ Session table (server-side revocation on logout)                    │
-│     ✓ [ValidateAntiForgeryToken] on all POST actions → CSRF prevention   │
-│     ✓ LocalRedirect() → Open Redirect prevention                         │
-│     ✓ Email enumeration prevention in ForgotPassword                     │
-│     ✓ Resource-level checks: if (app.UserId != currentUserId) Forbid()   │
-│     ✓ Role-level: [Authorize(Roles = "0")] / [Authorize(Roles = "0,2")]  │
-│     ✓ Input validation: [Required][EmailAddress][MinLength][Url][Regex]   │
-│     ✓ File upload: extension whitelist + 5 MB limit                       │
+│  3. Employer/interview side (15 min):                                     │
+│     Employer sees list of applications for their job posting              │
+│     Employer changes application status (0-5)                             │
+│     Employer schedules an interview:                                      │
+│          POST /api/interview-rounds { jobApplicationId, scheduledAt }    │
+│          → InterviewRound row saved, Notification sent to applicant      │
+│     Applicant can see their interview schedule in their applications view  │
 │                                                                             │
 │  QUESTIONS TO ANSWER OUT LOUD:                                             │
-│   • What is CSRF? How does the anti-forgery token stop it?                │
-│   • What is XSS? How does HttpOnly cookie help?                           │
-│   • What is an Open Redirect attack? How does LocalRedirect() stop it?   │
-│   • Why does the MVC Login parse the JWT without verifying the signature? │
-│   • What is [Authorize(Roles="0,2")]?                                     │
+│   • What is the ForgotPassword flow? Why show the same message always?   │
+│   • What role must a user have to post a job?                             │
+│   • How does the employer schedule an interview and who gets notified?    │
+│   • Walk me through viewing your own profile — which tables are joined?  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  HOUR 7  (6:00–7:00) — EF CORE DEEP DIVE + COMPANIES + PROFILES           │
-│  Sections to read: 7, 13, 14 (skim), and the EF section in 1             │
+│  HOUR 7  (6:00–7:00) — COMPANIES + SECURITY QUICK REVIEW                  │
+│  Sections to read: 7, 18 (security summary)                               │
 │  Files: APIPSI16/Controllers/CompaniesControllers.cs                      │
-│         APIPSI16/Data/xcleratesystemslinks_SampleDBContext.cs             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  WHAT TO DO:                                                                │
-│  1. Write these EF Core operations from memory (15 min):                  │
-│     .Include(x => x.Nav)     → eager load (SQL JOIN)                     │
-│     .AnyAsync(predicate)     → EXISTS check                               │
-│     .FindAsync(id)           → find by PK (uses cache first)             │
-│     .AddAsync(entity)        → marks as Added                             │
-│     .Remove(entity)          → marks as Deleted                          │
-│     .Update(entity)          → marks as Modified                         │
-│     EntityState.Modified     → marks ALL columns as dirty → UPDATE *     │
-│     .SaveChangesAsync()      → flushes all tracked changes in one tx     │
-│     .ExecuteUpdateAsync()    → bulk UPDATE without loading entities      │
-│     DbUpdateConcurrencyException → row changed/deleted between GET+PUT   │
+│  1. Companies flow (20 min):                                              │
+│     - Create company → anyone with Role=2 can create one                 │
+│     - Invite member: caller must be Role=2 AND CompanyMember.Role>=3     │
+│          (two separate checks — role on the API AND role in the company) │
+│     - Update company: PUT /api/companies/{id}                            │
+│     - Get company profile: returns company + members + open jobs        │
 │                                                                             │
-│  2. Read CompaniesController (20 min). Write:                             │
-│     - [Authorize(Roles="0,2")] — two-role guard                          │
-│     - InviteMember: API role check (must be "2") PLUS CompanyMember.Role  │
-│       check (must be >= 3 = CompanyAdmin) — two-level authorization      │
-│     - UpdateCompany: EntityState.Modified + DbUpdateConcurrencyException  │
-│     - GetCompanyProfile: projection with Select() — avoids over-fetching  │
+│  2. Security — the things that protect every flow (20 min):              │
+│     ✓ JWT in HttpOnly cookie → JS can't steal it (XSS protection)       │
+│     ✓ Sessions table → server can revoke a token even if it hasn't      │
+│          expired (logout actually works)                                  │
+│     ✓ [ValidateAntiForgeryToken] on all MVC POSTs → CSRF prevention     │
+│     ✓ Resource ownership check: if (resource.UserId != currentUserId)   │
+│          Forbid() — stops user A reading/editing user B's data           │
+│     ✓ [Authorize(Roles="0,2")] → only admins and employers can post jobs │
+│     ✓ LocalRedirect(returnUrl) — won't redirect to an external site     │
+│     ✓ ForgotPassword: same message whether email exists or not           │
+│     ✓ File upload: extension whitelist + 5 MB size limit                │
 │                                                                             │
-│  3. Read InterviewRoundsController (10 min):                              │
-│     - Creates InterviewRound row linked to JobApplicationId               │
-│     - Fetches app.UserId to notify the applicant                         │
-│     - Notification Payload = JSON string with scheduledAt in ISO 8601    │
+│  3. EF Core — just the patterns used in this code (10 min):             │
+│     .Include()       → loads related data (e.g. Include company members) │
+│     .AnyAsync()      → cheap EXISTS check before inserting               │
+│     .FindAsync(id)   → find by primary key                               │
+│     .AddAsync()      → stage a new row for INSERT                        │
+│     .Remove()        → stage a row for DELETE                            │
+│     .SaveChangesAsync() → send all staged changes to DB in one tx       │
 │                                                                             │
 │  QUESTIONS TO ANSWER OUT LOUD:                                             │
-│   • Difference between .Update() and EntityState.Modified?               │
-│   • When does DbUpdateConcurrencyException happen? How is it handled?    │
-│   • What is eager loading vs lazy loading? Which does this project use?  │
-│   • What does Select() projection do to the SQL query?                   │
+│   • What two checks must pass before you can invite someone to a company?│
+│   • What is CSRF? How does the anti-forgery token stop it?               │
+│   • What does HttpOnly on the cookie actually protect against?           │
+│   • Why does the site have a Sessions table on top of JWT?               │
+│   • What does .Include() do and why is it needed?                        │
+└─────────────────────────────────────────────────────────────────────────────┘
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  HOUR 8  (7:00–8:00) — RAPID-FIRE QUESTION PRACTICE                       │
-│  Use: Section 20 (all 40 questions)                                        │
+│  Use: Section 22 (JWT + cookies simple reference) + Section 20 (Q&A bank) │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  WHAT TO DO:                                                                │
-│  1. Cover the answers below. Read each question. Say answer OUT LOUD.     │
-│     If you blank, check Section 20. Do NOT just read — SPEAK the answer.  │
-│  2. After going through all 40, revisit only the ones you got wrong.     │
-│  3. Final 15 min: re-read your handwritten notes from Hours 1–7.         │
+│  1. First re-read Section 22 (JWT + cookies simple reference) — 10 min.  │
+│  2. Cover the answers in Section 20. Read each question out loud.         │
+│     Say the answer OUT LOUD. If you blank, check the notes.              │
+│  3. After all questions, revisit only the ones you got wrong.            │
+│  4. Final 10 min: re-read your handwritten notes from Hours 1–7.         │
 │                                                                             │
 │  TOP 10 MOST LIKELY PROFESSOR QUESTIONS (answer these perfectly):        │
 │  ────────────────────────────────────────────────────────────────────────  │
-│  1. What is a JWT? What are the 3 parts? What algorithm signs it?        │
-│  2. Why have a Sessions TABLE if JWTs are already signed?                │
-│  3. Singleton vs Scoped vs Transient — give an example of each.          │
-│  4. What is Dependency Injection and why does it matter?                 │
-│  5. What is CSRF and how does [ValidateAntiForgeryToken] prevent it?      │
-│  6. What does UserId int FK → Users mean in the DB? What is a FK?        │
-│  7. What is the MatchScore formula? What is F1 score?                    │
-│  8. What is SignalR and why use it for chat instead of regular HTTP?      │
-│  9. What is the two-project architecture and why separate them?          │
-│  10. What HTTP status codes does the API use and when? (200/201/204/400/  │
-│       401/403/404/409/429/500)                                            │
+│  1. Walk me through what happens when a user logs in to this site.        │
+│  2. What is a JWT? What are the 3 parts? What is in the payload here?    │
+│  3. Why is the JWT stored in a cookie? What cookie settings protect it?   │
+│  4. Why does the site also have a Sessions table? What does it add?       │
+│  5. What happens when a user applies for a job — what checks are done?    │
+│  6. What is SignalR and why is it used for chat instead of normal HTTP?   │
+│  7. Walk me through what happens when a user sends a connection request.  │
+│  8. What roles exist in the system and what can each role do?             │
+│  9. What does the match score do and how is it calculated?                │
+│  10. What HTTP status codes does the API use and when?                    │
+│       (200/201/204/400/401/403/404/409/429/500)                           │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -604,7 +742,7 @@ POTENTIAL PROFESSOR QUESTIONS (DB):
      JWT itself is still mathematically valid.
 
 ================================================================================
-SECTION 2 — Program.cs  [CRITICAL — read in Hour 3]
+SECTION 2 — Program.cs  [OPTIONAL — only skim if time allows in Hour 2]
 ================================================================================
 
 FILE: APIPSI16/Program.cs
@@ -693,7 +831,7 @@ POTENTIAL PROFESSOR QUESTIONS:
      a safe printable string. At runtime, Convert.FromBase64String() reverses it.
 
 ================================================================================
-SECTION 3 — AUTHENTICATION FLOW  [CRITICAL — read in Hour 2]
+SECTION 3 — AUTHENTICATION + JWT + COOKIES  [CRITICAL — read in Hour 2]
 ================================================================================
 
 FILES:
@@ -1467,6 +1605,83 @@ SECTION 19 — HTTP STATUS CODES  [CRITICAL — memorise in Hour 8]
   409 Conflict        — duplicate (already applied, already connected)
   429 Too Many Requests — rate limit hit (Free plan limits)
   500 Internal Server Error — unexpected exceptions
+
+================================================================================
+SECTION 22 — JWT & COOKIES: SIMPLE REFERENCE  [CRITICAL — quick flip-back]
+================================================================================
+
+HOW IT ALL WORKS ON THIS SITE — THE SHORT VERSION
+  You do NOT need to know implementation details. Know this story:
+
+  1. You visit the login page and submit your username + password.
+
+  2. The MVC app sends them to the API (/api/auth/login).
+
+  3. The API checks the password, then creates a JWT token.
+     The JWT contains: your userId, your username, your role, and an expiry.
+     It is SIGNED with a secret key so nobody can fake or alter it.
+
+  4. The API also saves a row in the Sessions table
+     (Token, UserId, IsActive=true, ExpiresAt).
+     This is so the site can revoke your login even before the JWT expires
+     (e.g. when you log out from another device).
+
+  5. The MVC app saves the JWT inside a cookie called "ApiAccessToken".
+     Cookie settings:
+       HttpOnly = true   → your browser's JavaScript CANNOT read it
+                           (protects against XSS attacks stealing the token)
+       Secure = true     → only sent over HTTPS
+       SameSite = Lax    → not sent on cross-site form posts (CSRF protection)
+       Expires in 1 hour → both the cookie and the JWT expire together
+
+  6. From now on, every time your browser makes a request, it sends the
+     cookie automatically. The MVC app reads the JWT out of the cookie and
+     attaches it as:   Authorization: Bearer <token>
+     when it calls the API.
+
+  7. The API receives the request, validates the JWT (checks signature,
+     checks expiry), then checks the Sessions table to make sure the
+     session is still IsActive=true and not expired.
+     If both pass → you are authenticated and your request goes through.
+
+  8. When you log out:
+     - The "ApiAccessToken" cookie is deleted from the browser.
+     - The Session row in the DB is set to IsActive=false.
+     - Even if someone had copied the JWT string, it is now invalid
+       because the Sessions check will reject it.
+
+  ─────────────────────────────────────────────────────────────────────────
+  WHY TWO THINGS? (JWT + Sessions table)
+  ─────────────────────────────────────────────────────────────────────────
+  A JWT on its own is "stateless" — once issued, anyone with the token can
+  use it until it expires. There is no way to revoke it early.
+
+  The Sessions table makes it "stateful" — the server keeps a record of
+  every active login. On logout, the record is marked inactive, so the JWT
+  is immediately invalidated even though it hasn't expired yet.
+
+  SHORT ANSWER FOR THE PROFESSOR:
+    "The Sessions table gives us server-side revocation. JWTs alone can't
+     be cancelled before their expiry time, but by checking the Sessions
+     table on every request we can instantly log someone out."
+
+  ─────────────────────────────────────────────────────────────────────────
+  JWT STRUCTURE — what the 3 parts actually contain here
+  ─────────────────────────────────────────────────────────────────────────
+  Header   : { "alg": "HS256", "typ": "JWT" }
+  Payload  : { "nameid": "42",              ← userId
+               "unique_name": "john_doe",   ← username
+               "role": "1",                 ← 0=Admin 1=User 2=Employer
+               "exp": 1741999200 }          ← unix timestamp expiry
+  Signature: HMAC-SHA256(base64(header) + "." + base64(payload), secretKey)
+
+  ─────────────────────────────────────────────────────────────────────────
+  COOKIE vs LOCALSTORAGE — why cookie is better here
+  ─────────────────────────────────────────────────────────────────────────
+  localStorage:  JavaScript CAN read it → XSS attack can steal the token
+  HttpOnly cookie: JavaScript CANNOT read it → XSS cannot steal the token
+  That is the only reason the JWT is stored in a cookie instead of
+  localStorage. The cookie IS the security wrapper around the JWT.
 
 ================================================================================
 SECTION 20 — EXAM / INTERVIEW QUESTION BANK  [CRITICAL — use in Hour 8]
