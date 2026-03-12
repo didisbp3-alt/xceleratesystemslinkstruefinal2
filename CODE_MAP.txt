@@ -1,0 +1,878 @@
+================================================================================
+CODE_MAP.txt — "Where in the code does it do that?"
+================================================================================
+
+PURPOSE
+  This file is your instant navigation guide for the presentation.
+  If the teacher asks "OK, but where exactly does the code handle that?" —
+  open this file, jump to the right section, and you have the exact file name,
+  class name, method name, and line number.
+
+HOW TO READ EACH ENTRY
+  Feature / what you showed:  plain-English description
+    FILE:   relative path from FINALfinalXcelerateLinks/
+    CLASS:  the C# class
+    METHOD: the method (and line number)
+    NOTE:   one sentence on what the code actually does there
+
+PATHS ARE RELATIVE TO:
+  FINALfinalXcelerateLinks/
+  (so "APIPSI16/..." means  FINALfinalXcelerateLinks/APIPSI16/...)
+
+================================================================================
+1.  LOGIN
+================================================================================
+
+[A] User submits the login form
+    FILE:   XcelerateLinks/Controllers/AccountController.cs
+    CLASS:  AccountController
+    METHOD: Login (POST overload)  ← line 59
+    NOTE:   Sends the username+password to POST /api/auth/login, receives
+            the JWT, stores it in the HttpOnly "ApiAccessToken" cookie,
+            calls HttpContext.SignInAsync() to create the browser session.
+
+[B] API validates credentials and issues the JWT
+    FILE:   APIPSI16/Controllers/AuthController.cs
+    CLASS:  AuthController
+    METHOD: Login  ← line 45
+    NOTE:   Looks up the user by email OR username, verifies the password
+            with PasswordHasher, builds the JWT via TokenService.CreateToken(),
+            saves a Session row, returns { token, expiresAt }.
+
+[C] JWT is created (signed)
+    FILE:   APIPSI16/Services/TokenService.cs
+    CLASS:  TokenService
+    METHOD: CreateToken  ← line 25
+    NOTE:   Reads the base64 secret from env var XCELERATE_JWT_KEY, builds
+            a JwtSecurityToken with NameIdentifier=userId, Role claim, expiry,
+            and signs it with HS256 (HMAC-SHA256).
+
+[D] Session row is saved (server-side revocation)
+    FILE:   APIPSI16/Services/SessionService.cs
+    CLASS:  SessionService
+    METHOD: CreateSessionAsync  ← line 26
+    NOTE:   Invalidates all previous sessions for this user (IsActive=false),
+            then inserts a new Sessions row with the JWT string and ExpiresAt.
+
+[E] JWT injected into every subsequent API call
+    FILE:   XcelerateLinks/Services/TokenHandler.cs
+    CLASS:  TokenHandler (DelegatingHandler)
+    METHOD: SendAsync  (the override — look for "override" ~line 14)
+    NOTE:   Reads the "ApiAccessToken" cookie from IHttpContextAccessor and
+            adds it as the Authorization: Bearer header on every outgoing
+            HttpClient request to the API.
+
+================================================================================
+2.  REGISTER
+================================================================================
+
+[A] Registration form submitted
+    FILE:   XcelerateLinks/Controllers/AccountController.cs
+    CLASS:  AccountController
+    METHOD: Register (POST)  ← line 155
+    NOTE:   Calls POST /api/auth/register. If role != "0" (admin), the API
+            forces the new user's Role to 1 (jobseeker) — admins can't be
+            self-registered.
+
+[B] API creates the user
+    FILE:   APIPSI16/Controllers/AuthController.cs
+    CLASS:  AuthController
+    METHOD: Register  ← line 156
+    NOTE:   Validates the RegisterRequest DTO (email, min-8-char password,
+            phone regex), hashes the password with PasswordHasher, inserts
+            the User row.
+
+================================================================================
+3.  LOGOUT / SESSION REVOCATION
+================================================================================
+
+[A] User clicks Logout
+    FILE:   XcelerateLinks/Controllers/AccountController.cs
+    CLASS:  AccountController
+    METHOD: Logout  ← line 139
+    NOTE:   Calls POST /api/auth/logout, deletes the cookie, calls
+            HttpContext.SignOutAsync().
+
+[B] API invalidates the session
+    FILE:   APIPSI16/Controllers/AuthController.cs
+    CLASS:  AuthController
+    METHOD: Logout  ← line 140
+    NOTE:   Calls SessionService.InvalidateSessionAsync(token) which sets
+            IsActive=false on the Sessions row. The JWT is still
+            mathematically valid but is now rejected by ValidateSessionAsync.
+
+[C] Every API request re-checks the session
+    FILE:   APIPSI16/Controllers/ApiControllerBase.cs
+    CLASS:  ApiControllerBase
+    METHOD: ValidateSessionAsync  ← line 16
+    NOTE:   Extracts userId from JWT claim, calls
+            SessionService.IsSessionValidAsync(userId, token).
+            Returns 401 if the session row is inactive/missing.
+
+================================================================================
+4.  FORGOT PASSWORD / RESET
+================================================================================
+
+[A] Forgot Password form
+    FILE:   XcelerateLinks/Controllers/AccountController.cs
+    CLASS:  AccountController
+    METHOD: ForgotPassword (POST)  ← line 203
+    NOTE:   Calls PasswordResetService.GeneratePasswordResetToken(email)
+            then IEmailSender.SendPasswordResetEmailAsync() with a link.
+            Always shows the same success message whether email exists or not
+            (prevents email enumeration).
+
+[B] Token generation (2-hour expiry)
+    FILE:   XcelerateLinks/Services/PasswordResetService.cs
+    CLASS:  PasswordResetService
+    METHOD: GeneratePasswordResetToken  ← line 14
+    NOTE:   Uses ASP.NET Core Data Protection to encrypt { email + timestamp }
+            into a URL-safe token. TryValidatePasswordResetToken (line 20)
+            decrypts it and checks the 2-hour lifespan.
+
+[C] Reset password submitted
+    FILE:   XcelerateLinks/Controllers/AccountController.cs
+    CLASS:  AccountController
+    METHOD: ResetPassword (POST with token+password)  ← line 243
+    NOTE:   Validates the token, calls PUT /api/auth/reset-password with the
+            new password; the API re-hashes and saves it.
+
+================================================================================
+5.  SESSION CHECK ON EVERY MVC PAGE
+================================================================================
+
+    FILE:   XcelerateLinks/Controllers/BaseController.cs
+    CLASS:  BaseController
+    METHOD: ValidateSessionAsync  ← line 19
+    NOTE:   Called at the top of every MVC action. Checks the ASP.NET
+            authentication cookie is still valid. Redirects to Login if not.
+            Wraps the API-side ValidateSessionAsync which checks the Sessions
+            table.
+
+================================================================================
+6.  BROWSE JOB OPPORTUNITIES (with match scores)
+================================================================================
+
+[A] User sees the opportunities list (with % match)
+    FILE:   XcelerateLinks/Controllers/OpportunitiesController.cs
+    CLASS:  OpportunitiesController
+    METHOD: Index  ← line 20
+    NOTE:   If role == User/Employer, calls GET /api/opportunities/with-match.
+            If admin, calls GET /api/opportunities (plain list).
+            Filters (q, locationId, employmentType, remoteOption) are applied
+            in memory after the API response arrives.
+
+[B] API calculates match scores for every opportunity
+    FILE:   APIPSI16/Controllers/OpportunitiesController.cs
+    CLASS:  OpportunitiesController
+    METHOD: GetOpportunitiesWithMatch  ← line 230
+    NOTE:   Loads the user's job-role preferences and location. For each
+            opportunity calls CalculateMatchScoreAsync. Sorts by score desc.
+
+[C] The actual match score formula
+    FILE:   APIPSI16/Services/MatchScoreHelper.cs
+    CLASS:  MatchScoreHelper (static)
+    METHODS:
+      ComputeRoleScore      ← line 88  (F1 formula)
+      ComputeLocationScore  ← line 34  (small-country heuristic)
+      ComputeWeightedScore  ← line 101 (70% roles + 30% location)
+    NOTE:   F1 = 2*matchCount / (userPrefCount + requiredRoleCount) * 100.
+            Small countries (PT/NL/BE/...) score 35 even if different region.
+            Large countries (US/CA/BR) score 0 for different region.
+
+[D] View rendered
+    FILE:   XcelerateLinks/Views/Opportunities/UserIndex.cshtml
+    NOTE:   Shows the match percentage badge, role tags, and apply button.
+
+================================================================================
+7.  APPLY FOR A JOB
+================================================================================
+
+[A] Apply form is displayed
+    FILE:   XcelerateLinks/Controllers/ApplicationsController.cs
+    CLASS:  ApplicationsController
+    METHOD: Create (GET)  ← line 79
+    NOTE:   Pre-populates the form with the user's profile data; loads the
+            opportunity details so the user sees what they're applying for.
+
+[B] Apply form submitted
+    FILE:   XcelerateLinks/Controllers/ApplicationsController.cs
+    CLASS:  ApplicationsController
+    METHOD: Create (POST)  ← line 112
+    NOTE:   Sends ApplyDto to POST /api/jobapplications/apply.
+            Displays "already applied" or "limit reached" messages from the
+            API response.
+
+[C] API enforces duplicate check and Free-plan limit
+    FILE:   APIPSI16/Controllers/JobApplicationsController.cs
+    CLASS:  JobApplicationsController
+    METHOD: Apply  ← line 34
+    NOTE:   Line ~50: AnyAsync duplicate check → 409 Conflict.
+            Line ~60: Free plan (SubscriptionPlan==0) counts this-month apps,
+            if >= 5 returns 429 Too Many Requests.
+            Line ~80: Inserts JobApplication row.
+            Line ~95: Best-effort notification to the employer (try/catch —
+            failure does NOT roll back the application).
+
+[D] View
+    FILE:   XcelerateLinks/Views/Applications/Create.cshtml
+    NOTE:   Contains the OpenToRemote checkbox
+            (<input type="checkbox" asp-for="Application.OpenToRemote" />).
+            The type="checkbox" is required for a bool? field.
+
+================================================================================
+8.  EMPLOYER VIEWS APPLICATION PIPELINE
+================================================================================
+
+[A] Pipeline page shown
+    FILE:   XcelerateLinks/Controllers/ApplicationsController.cs
+    CLASS:  ApplicationsController
+    METHOD: Pipeline  ← line 199
+    NOTE:   Calls GET /api/jobapplications/for-company/{companyId}.
+            Organises applications into stage columns (Applied/UnderReview/
+            Interview/Offer/Hired/Rejected).
+
+[B] API returns applications for the employer's company
+    FILE:   APIPSI16/Controllers/JobApplicationsController.cs
+    CLASS:  JobApplicationsController
+    METHOD: ForCompany  ← line 274
+    NOTE:   Verifies the requesting user is a member of that company before
+            returning the list. Returns ApplicationDTOs with stage/status.
+
+[C] Employer advances an application to the next stage
+    FILE:   APIPSI16/Controllers/JobApplicationsController.cs
+    CLASS:  JobApplicationsController
+    METHOD: UpdateStage  ← line 172
+    NOTE:   Validates the stage transition (can't go backwards past Hired),
+            updates the Status field, sends a notification to the applicant.
+
+[D] View
+    FILE:   XcelerateLinks/Views/Applications/Pipeline.cshtml
+    NOTE:   Kanban-style columns. Each card has a "Move to next stage" button.
+
+================================================================================
+9.  EMPLOYER SCHEDULES AN INTERVIEW
+================================================================================
+
+[A] Employer schedules a round
+    FILE:   APIPSI16/Controllers/InterviewRoundsController.cs
+    CLASS:  InterviewRoundsController
+    METHOD: Schedule  ← line 22
+    NOTE:   Creates InterviewRound row (linked to JobApplicationId, with
+            ScheduledAt, InterviewerUserId, RoundNumber).
+            Sends "InterviewScheduled" notification to the applicant
+            (app.UserId), with the timestamp in the Payload as ISO 8601.
+
+[B] DTO used
+    FILE:   APIPSI16/Models/DTOs/ScheduleDto.cs
+    NOTE:   Fields: JobApplicationId, ScheduledAt, InterviewerUserId, Notes,
+            RoundNumber.
+
+================================================================================
+10. APPLICANT RESPONDS TO OFFER/INTERVIEW
+================================================================================
+
+    FILE:   APIPSI16/Controllers/JobApplicationsController.cs
+    CLASS:  JobApplicationsController
+    METHOD: ApplicantRespond  ← line 361
+    NOTE:   Response=1 (Accept) + status=3 (Offer) → moves to Hired (4) and
+            sets User.IsOpenToWork=false.
+            Response=2 (Decline) → moves to Rejected (5).
+            MVC side: ApplicationsController.ApplicantRespond ← line 308.
+
+================================================================================
+11. CONNECTIONS (send / accept / list)
+================================================================================
+
+[A] User clicks "Connect"
+    FILE:   XcelerateLinks/Controllers/ConnectionsController.cs
+    CLASS:  ConnectionsController
+    METHOD: Connect  ← line 46
+    NOTE:   Calls POST /api/connections/request with { addresseeUserId }.
+
+[B] API creates the connection request
+    FILE:   APIPSI16/Controllers/ConnectionsController.cs
+    CLASS:  ConnectionsController
+    METHOD: CreateRequest  ← line 25
+    NOTE:   Checks not self-connecting, checks no existing row in EITHER
+            direction (AnyAsync).
+            Free plan: if accepted-connections count >= 50 → 429.
+            Inserts Connection row (Status=0 Pending).
+            Creates "ConnectionRequest" Notification for the addressee.
+
+[C] User accepts a request
+    FILE:   APIPSI16/Controllers/ConnectionsController.cs
+    CLASS:  ConnectionsController
+    METHOD: Accept  ← line 75
+    NOTE:   Sets Status=1 (Accepted), AcceptedAt=now.
+            Sends "ConnectionAccepted" notification back to the requester.
+
+[D] Connection list page
+    FILE:   XcelerateLinks/Controllers/ConnectionsController.cs
+    CLASS:  ConnectionsController
+    METHOD: Index  ← line 20
+    NOTE:   Calls GET /api/connections/my-with-users (accepted connections
+            with the other user's name/picture) and
+            GET /api/connections/pending (incoming pending requests).
+
+[E] UNIQUE INDEX preventing duplicates
+    FILE:   APIPSI16/Data/xcleratesystemslinks_SampleDBContext.cs
+    NOTE:   HasIndex(c => new { c.RequesterUserId, c.AddresseeUserId }).IsUnique()
+            — the database itself enforces uniqueness as a last resort.
+
+================================================================================
+12. REAL-TIME CHAT (SignalR)
+================================================================================
+
+[A] User opens the chat page
+    FILE:   XcelerateLinks/Controllers/ChatsController.cs
+    CLASS:  ChatsController
+    METHOD: Messages  ← line 43
+    NOTE:   Returns the Messages view; the SignalR connection is set up
+            in JavaScript in the view.
+
+[B] SignalR hub — user connects
+    FILE:   APIPSI16/Hubs/ChatHub.cs
+    CLASS:  ChatHub
+    METHOD: OnConnectedAsync  ← line 27
+    NOTE:   Adds the connectionId to the static _userConnections dictionary
+            (key=userId). Calls Groups.AddToGroupAsync() for every chat the
+            user belongs to ("chat_{chatId}") and for the personal group
+            "user_{userId}". Notifies other participants "user is online".
+
+[C] User sends a message
+    FILE:   APIPSI16/Hubs/ChatHub.cs
+    CLASS:  ChatHub
+    METHOD: SendMessage  ← line 138
+    NOTE:   Verifies the user is a ChatUser for this chat. Inserts
+            ChatMessage row. Broadcasts to Clients.Group("chat_{chatId}").
+
+[D] Typing indicator
+    FILE:   APIPSI16/Hubs/ChatHub.cs
+    CLASS:  ChatHub
+    METHOD: TypingIndicator  ← line 184
+    NOTE:   Clients.OthersInGroup() — sends to everyone in the group
+            EXCEPT the caller.
+
+[E] Mark message as read
+    FILE:   APIPSI16/Hubs/ChatHub.cs
+    CLASS:  ChatHub
+    METHOD: MarkMessageAsRead  ← line 199
+    NOTE:   Sets ChatMessage.ReadAt = now. Notifies sender via
+            Clients.Group("user_{senderId}").
+
+[F] Bulk mark-all-as-read (no entity loading)
+    FILE:   APIPSI16/Controllers/ChatController.cs
+    CLASS:  ChatController
+    METHOD: MarkAllAsRead  ← line 200
+    NOTE:   Uses .ExecuteUpdateAsync() — a single SQL UPDATE, no EF tracking.
+
+[G] Start a new Direct chat (idempotency)
+    FILE:   APIPSI16/Controllers/ChatController.cs
+    CLASS:  ChatController
+    METHOD: CreateChatWithParticipants  ← line 301
+    NOTE:   For 2-person (Direct) chats, checks if an existing chat already
+            has exactly these two participants and returns it instead of
+            creating a duplicate.
+
+[H] Static _userConnections dictionary (shared state)
+    FILE:   APIPSI16/Hubs/ChatHub.cs
+    CLASS:  ChatHub
+    FIELD:  _userConnections  ← line 18
+    NOTE:   static ConcurrentDictionary<int, HashSet<string>>. Static because
+            Hubs are transient (new instance per connection). ConcurrentDictionary
+            for thread safety.
+
+[I] View (chat UI + SignalR JS client)
+    FILE:   XcelerateLinks/Views/Chats/Messages.cshtml
+    FILE:   XcelerateLinks/Views/Shared/_ChatWidget.cshtml
+    NOTE:   Messages.cshtml holds the full chat window and the JavaScript
+            that calls hub.invoke("SendMessage", ...).
+
+================================================================================
+13. NOTIFICATIONS
+================================================================================
+
+[A] Notifications are created (by other controllers)
+    Created in:
+      ConnectionsController.CreateRequest  (line 25)  → "ConnectionRequest"
+      ConnectionsController.Accept         (line 75)  → "ConnectionAccepted"
+      InterviewRoundsController.Schedule   (line 22)  → "InterviewScheduled"
+      OpportunitiesController (after CreateOpportunity) → "PerfectOpportunityMatch"
+      JobApplicationsController.Apply      (line 34)  → application notification
+
+[B] User retrieves their notifications
+    FILE:   APIPSI16/Controllers/NotificationsController.cs
+    CLASS:  NotificationsController
+    METHOD: MyNotifications  ← line 21
+    NOTE:   Returns up to 100 most recent notifications for the current user
+            ordered by CreatedAt desc.
+
+[C] Mark a notification as read
+    FILE:   APIPSI16/Controllers/NotificationsController.cs
+    CLASS:  NotificationsController
+    METHOD: MarkRead  ← line 30
+    NOTE:   Sets IsRead=true. Verifies n.UserId == currentUserId so you can't
+            mark someone else's notification.
+
+================================================================================
+14. USER PROFILE (view / edit / picture)
+================================================================================
+
+[A] View another user's profile
+    FILE:   XcelerateLinks/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: Details  ← line 86
+    NOTE:   Calls GET /api/users/{id}/profile. Shows education, experience,
+            skills, connections-in-common, OpenToWork badge.
+
+[B] API returns the full profile DTO
+    FILE:   APIPSI16/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: GetUserProfile  ← line 144
+    NOTE:   Loads User + ProfileEducations + ProfileExperiences + UserSkills
+            + SkillEndorsements + JobPreferences + connection status relative
+            to the requesting user.
+
+[C] Edit profile
+    FILE:   XcelerateLinks/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: Edit (POST)  ← line 216
+    NOTE:   Calls PUT /api/users/{id}. SelectedJobRoleIds comes from a
+            multi-select in the form and is passed as a List<int>.
+
+[D] Upload profile picture
+    FILE:   APIPSI16/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: UploadProfilePicture  ← line 233
+    NOTE:   FileStorageService.ValidateImageFile() checks extension + 5 MB
+            limit. Generates Guid filename. Saves to /uploads/profiles/.
+
+[E] FileStorageService (image/document upload)
+    FILE:   APIPSI16/Services/FileStorageService.cs
+    CLASS:  FileStorageService
+    METHODS:
+      ValidateImageFile           ← line 29
+      ValidateDocumentOrImageFile ← line 55
+      SaveFileAsync               ← line 81
+    NOTE:   GUID filename prevents name collisions and directory traversal.
+
+================================================================================
+15. REQUEST EMPLOYER ROLE / ADMIN APPROVAL
+================================================================================
+
+[A] User requests employer role
+    FILE:   XcelerateLinks/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: RequestEmployer (POST)  ← line 262
+    NOTE:   Calls POST /api/users/request-employer with optional PDF document.
+
+[B] API saves the request
+    FILE:   APIPSI16/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: RequestEmployerRole  ← line 308
+    NOTE:   Saves EmployerRequestDocumentUrl + EmployerRequestNote on the User
+            row; sets Role to a "pending" state.
+
+[C] Admin sees pending requests
+    FILE:   XcelerateLinks/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: EmployerRequests  ← line 338
+    NOTE:   Calls GET /api/users/pending-employers.
+
+[D] Admin approves
+    FILE:   APIPSI16/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: ApproveEmployerRole  ← line 381
+    NOTE:   Sets User.Role = 2 (Employer). Optionally sets the CompanyMember
+            role if companyMemberRole query param is supplied.
+
+================================================================================
+16. COMPANIES
+================================================================================
+
+[A] Company list / search
+    FILE:   XcelerateLinks/Controllers/CompaniesController.cs
+    CLASS:  CompaniesController
+    METHOD: Index  ← line 24
+    NOTE:   Calls GET /api/companies. Client-side filters the results by
+            the search query string.
+
+[B] Company profile page
+    FILE:   XcelerateLinks/Controllers/CompaniesController.cs
+    CLASS:  CompaniesController
+    METHOD: Details  ← line 67
+    NOTE:   Calls GET /api/companies/{id}/profile which returns the company
+            plus its members and posted opportunities in one DTO.
+
+[C] API returns the full company profile
+    FILE:   APIPSI16/Controllers/CompaniesControllers.cs
+    CLASS:  CompaniesController
+    METHOD: GetCompanyProfile  ← line 55
+    NOTE:   Uses Select() projection to build CompanyProfileDTO (lightweight
+            shapes) — avoids loading unnecessary columns.
+
+[D] Manage company (invite/remove members)
+    FILE:   XcelerateLinks/Controllers/CompaniesController.cs
+    CLASS:  CompaniesController
+    METHOD: Manage  ← line 173
+    NOTE:   Only visible to users with CompanyMember.Role >= 3 (CompanyAdmin).
+
+[E] Invite member (two-level role check)
+    FILE:   APIPSI16/Controllers/CompaniesControllers.cs
+    CLASS:  CompaniesController
+    METHOD: InviteMember  ← line 164
+    NOTE:   First checks JWT Role ("0" or "2"). Then checks that the requesting
+            user's CompanyMember.Role >= 3 (CompanyAdmin). Double gate.
+
+[F] DbUpdateConcurrencyException handling
+    FILE:   APIPSI16/Controllers/CompaniesControllers.cs
+    CLASS:  CompaniesController
+    METHOD: UpdateCompany  ← line 241
+    NOTE:   Wraps SaveChangesAsync in try/catch DbUpdateConcurrencyException.
+            If CompanyExists() returns false → 404 (row was deleted).
+            Otherwise re-throws.
+
+================================================================================
+17. SUBSCRIPTION PLANS
+================================================================================
+
+[A] Subscription page
+    FILE:   XcelerateLinks/Controllers/SubscriptionsController.cs
+    CLASS:  SubscriptionsController
+    METHOD: Index  ← line 16
+    NOTE:   Shows current plan and Upgrade buttons for Pro (1) and
+            Enterprise (2).
+
+[B] Upgrade plan
+    FILE:   XcelerateLinks/Controllers/SubscriptionsController.cs
+    CLASS:  SubscriptionsController
+    METHOD: Upgrade  ← line 40
+    NOTE:   Calls PUT /api/users/{id}/subscription.
+
+[C] Free plan: monthly application limit enforced
+    FILE:   APIPSI16/Controllers/JobApplicationsController.cs
+    CLASS:  JobApplicationsController
+    METHOD: Apply  ← line 34  (check starts around line 58)
+    NOTE:   If SubscriptionPlan==0: counts rows where UserId==uid AND
+            AppliedAt >= new DateTime(UtcNow.Year, UtcNow.Month, 1).
+            If count >= 5 → return 429 Too Many Requests.
+
+[D] Free plan: connection limit enforced
+    FILE:   APIPSI16/Controllers/ConnectionsController.cs
+    CLASS:  ConnectionsController
+    METHOD: CreateRequest  ← line 25  (check around line 45)
+    NOTE:   If SubscriptionPlan==0: counts accepted connections.
+            If count >= 50 → return 429 Too Many Requests.
+
+================================================================================
+18. EMPLOYER CONTACT LIST (candidate pipeline / match board)
+================================================================================
+
+[A] Employer contact list page
+    FILE:   XcelerateLinks/Controllers/EmployerContactsController.cs
+    CLASS:  EmployerContactsController
+    METHOD: Index  ← line 18
+    NOTE:   Calls GET /api/opportunities/employer-contacts with companyId.
+            Shows candidates ranked by match score with priority flags.
+
+[B] API returns contacts with match scores
+    FILE:   APIPSI16/Controllers/OpportunitiesController.cs
+    CLASS:  OpportunitiesController
+    METHOD: GetEmployerContacts  ← line 544
+    NOTE:   Joins EmployerCandidateHistory + Users + Opportunities. Runs
+            CalculateMatchScoreAsync for each candidate/opportunity pair.
+            Returns ContactRow DTOs sorted by match score.
+
+[C] Set priority / discard a contact
+    FILE:   APIPSI16/Controllers/OpportunitiesController.cs
+    CLASS:  OpportunitiesController
+    METHOD: SetContactPriority  ← line 583
+    METHOD: DiscardContact      ← line 602
+    NOTE:   PriorityId and IsDiscarded are columns added via raw SQL
+            ALTER TABLE at startup (see Program.cs safety-net block).
+
+[D] Trash / restore discarded contacts
+    FILE:   XcelerateLinks/Controllers/EmployerContactsController.cs
+    CLASS:  EmployerContactsController
+    METHOD: Trash    ← line 55
+    METHOD: Restore  ← line 109
+
+================================================================================
+19. ADMIN DASHBOARD
+================================================================================
+
+[A] Admin home page (stats)
+    FILE:   XcelerateLinks/Controllers/HomeController.cs
+    CLASS:  HomeController
+    METHOD: AdminIndex  ← line 89
+    NOTE:   Calls GET /api/users/stats for UserCount/CompanyCount/OppCount.
+
+[B] Revenue / profit page
+    FILE:   XcelerateLinks/Controllers/HomeController.cs
+    CLASS:  HomeController
+    METHOD: Profit  ← line 141
+    NOTE:   Calls GET /api/users/revenue-stats. Calculates monthly/yearly
+            revenue from Pro (€9) and Enterprise (€29) counts. Applies 23%
+            VAT. Returns MonthlyProfit, YearlyProfit.
+
+[C] API returns revenue stats
+    FILE:   APIPSI16/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: GetRevenueStats  ← line 955
+    NOTE:   Groups users by SubscriptionPlan, counts each tier, returns DTO
+            that the MVC side uses to calculate projections.
+
+[D] Admin user list (filter by role / nationality)
+    FILE:   APIPSI16/Controllers/UsersController.cs
+    CLASS:  UsersController
+    METHOD: GetUsers  ← line 33
+    NOTE:   Supports ?jobPreference= and ?nationality= query filters.
+
+================================================================================
+20. PROFILE: EDUCATION / EXPERIENCE / SKILLS
+================================================================================
+
+[A] Add education entry
+    FILE:   APIPSI16/Controllers/ProfileEducations.cs
+    CLASS:  ProfileEducationsController
+    METHOD: Add  ← line 24
+    NOTE:   Inserts ProfileEducation row linked to the current user.
+
+[B] Add work experience
+    FILE:   APIPSI16/Controllers/ProfileExperiencesController.cs
+    CLASS:  ProfileExperiencesController
+    METHOD: Add  ← line 25
+    NOTE:   IsCurrent=true means EndDate is null (still working there).
+            Uses DateOnly type (date without time, maps to SQL Server date).
+
+[C] Add / endorse skill
+    FILE:   APIPSI16/Controllers/UserSkillsController.cs
+    NOTE:   POST /api/userskills — links a Skill to a User.
+    FILE:   APIPSI16/Controllers/SkillEndorsementsController.cs
+    NOTE:   POST /api/skillendorsements — other users can endorse your skill.
+
+================================================================================
+21. POSTS (feed, comments, reactions)
+================================================================================
+
+[A] Create a post
+    FILE:   APIPSI16/Controllers/PostsController.cs
+    CLASS:  PostsController
+    METHOD: CreatePost  ← line 51
+    NOTE:   Visibility: 0=Public, 1=Connections, 2=Private. The feed endpoint
+            filters by connection status before returning posts.
+
+[B] Feed (paginated)
+    FILE:   APIPSI16/Controllers/PostsController.cs
+    CLASS:  PostsController
+    METHOD: GetFeed  ← line 32
+    NOTE:   Returns up to pageSize posts, ordered by CreatedAt desc, filtered
+            by visibility and connection status.
+
+================================================================================
+22. MIDDLEWARE & REQUEST PIPELINE
+================================================================================
+
+[A] ASP.NET Core middleware pipeline (API)
+    FILE:   APIPSI16/Program.cs  ← lines 315-325
+    NOTE:   UseHttpsRedirection → UseStaticFiles → UseCors("AllowMvcFrontend")
+            → UseAuthentication → UseAuthorization → MapControllers
+            → MapHub<ChatHub>("/hubs/chat")
+
+[B] JWT authentication wired up
+    FILE:   APIPSI16/Program.cs  ← lines 139-199
+    NOTE:   AddAuthentication().AddJwtBearer(). Validates issuer, audience,
+            signing key. For SignalR, the token is read from query string
+            (?access_token=...) because WebSocket upgrades can't set headers.
+
+[C] Cookie authentication (MVC side)
+    FILE:   XcelerateLinks/Program.cs  ← lines 79-93
+    NOTE:   AddAuthentication(CookieAuthenticationDefaults).AddCookie().
+            Cookie is HttpOnly + Secure (HTTPS) + SameSite=Lax + 1-hour expiry.
+
+[D] Disabled global session middleware (kept for reference)
+    FILE:   APIPSI16/Middleware/SessionValidationMiddleware.cs
+    NOTE:   Would validate the Sessions table on every request.
+            Disabled (commented out in Program.cs line 322) because per-
+            controller ValidateSessionAsync gives better granularity and
+            doesn't interfere with SignalR or Swagger.
+
+[E] DI registrations (API)
+    FILE:   APIPSI16/Program.cs  ← lines 133-136
+    NOTE:   Singleton: ITokenService
+            Scoped:    IPasswordHasher, IFileStorageService, ISessionService
+            Scoped:    DbContext (one per request)
+
+[F] DI registrations (MVC)
+    FILE:   XcelerateLinks/Program.cs  ← lines 14-94
+    NOTE:   Transient: TokenHandler (DelegatingHandler)
+            Singleton: PasswordResetService, IEmailSender
+            Scoped:    ISessionService, IUserService, IFileStorageService
+            Named HttpClient "Api" with base URL from appsettings/env.
+
+================================================================================
+23. SECURITY FEATURES  (how to answer "how is X secured?")
+================================================================================
+
+CSRF protection
+    FILE:   XcelerateLinks/Views/**/*.cshtml  (every POST form)
+    NOTE:   @Html.AntiForgeryToken() or tag helper generates the hidden field.
+    FILE:   All POST MVC actions
+    ATTR:   [ValidateAntiForgeryToken]  on every POST action in MVC controllers.
+
+XSS prevention
+    NOTE:   Razor automatically HTML-encodes @Model output. HttpOnly cookie
+            means JS can never read the JWT.
+
+Open Redirect prevention
+    FILE:   XcelerateLinks/Controllers/AccountController.cs
+    METHOD: Login (POST)  ← line 59
+    NOTE:   LocalRedirect(returnUrl) — only allows local (relative) URLs.
+
+Password hashing (PBKDF2)
+    FILE:   APIPSI16/Controllers/AuthController.cs
+    METHOD: Register  ← line 156  (hash created)
+    METHOD: Login     ← line 45   (hash verified with VerifyHashedPassword)
+
+Email enumeration prevention
+    FILE:   XcelerateLinks/Controllers/AccountController.cs
+    METHOD: ForgotPassword (POST)  ← line 203
+    NOTE:   Always shows the same message whether the email exists or not.
+
+Role-based authorisation attributes
+    FILES:  APIPSI16/Controllers/*.cs
+    ATTR:   [Authorize]                      — any authenticated user
+            [Authorize(Roles = "0")]          — admin only
+            [Authorize(Roles = "0,2")]        — admin or employer
+            [AllowAnonymous]                  — login, register, debug endpoints
+
+File upload security
+    FILE:   APIPSI16/Services/FileStorageService.cs
+    METHOD: ValidateImageFile  ← line 29
+    NOTE:   Extension whitelist (.jpg/.jpeg/.png/.gif for images, also .pdf
+            for documents). Max 5 MB. GUID filename (prevents traversal).
+
+================================================================================
+24. EF CORE PATTERNS  (how to answer "how does the DB work?")
+================================================================================
+
+DbContext definition (tables + relationships)
+    FILE:   APIPSI16/Data/xcleratesystemslinks_SampleDBContext.cs
+    NOTE:   All HasForeignKey(), HasMaxLength(), HasIndex().IsUnique(),
+            HasColumnName() mappings live here.
+
+Eager loading with Include
+    EXAMPLE: OpportunitiesController.GetOpportunity  ← line 83
+             .Include(o => o.Company) in the query — one round trip.
+
+ExecuteUpdateAsync (bulk update without tracking)
+    FILE:   APIPSI16/Controllers/ChatController.cs
+    METHOD: MarkAllAsRead  ← line 200
+    NOTE:   Single SQL UPDATE. No entities loaded into memory.
+
+EntityState.Modified (update all columns)
+    FILE:   APIPSI16/Controllers/CompaniesControllers.cs
+    METHOD: UpdateCompany  ← line 241
+    NOTE:   _context.Entry(company).State = EntityState.Modified — marks
+            all properties dirty → full-row UPDATE.
+
+DbUpdateConcurrencyException
+    FILE:   APIPSI16/Controllers/CompaniesControllers.cs
+    METHOD: UpdateCompany  ← line 241
+    NOTE:   Caught when another request deleted the row between GET and PUT.
+
+Migrations applied at startup + raw SQL safety-net
+    FILE:   APIPSI16/Program.cs  ← lines 206-302
+    NOTE:   ctx.Database.Migrate() runs pending EF migrations.
+            IF NOT EXISTS raw SQL for PriorityId and IsDiscarded columns
+            that were added outside EF migrations.
+
+================================================================================
+25. DATA TRANSFER OBJECTS  (quick reference)
+================================================================================
+
+ApplyDto              APIPSI16/Models/DTOs/ApplyDto.cs
+ScheduleDto           APIPSI16/Models/DTOs/ScheduleDto.cs
+UpdateStatusDto       APIPSI16/Models/DTOs/UpdateStatusDto.cs
+UpdateStageDTO        APIPSI16/Models/DTOs/UpdateStageDTO.cs
+CompanyProfileDTO     APIPSI16/Models/DTOs/CompanyProfileDTO.cs
+UserProfileDTO        APIPSI16/Models/DTOs/UserProfileDTO.cs
+ChatDTO / ChatDetailDTO  APIPSI16/Models/DTOs/ChatDTO.cs, ChatDetailDTO.cs
+CreateChatWithParticipantsDto  APIPSI16/Models/DTOs/CreateChatWithParticipantsDto.cs
+CreateConnectionRequestDto     APIPSI16/Models/DTOs/CreateConnectionRequestDto.cs
+EmployerMatchDto      APIPSI16/Models/DTOs/EmployerMatchDto.cs
+LoginRequest / RegisterRequest  APIPSI16/Controllers/AuthController.cs  ← line 293
+
+================================================================================
+26. KEY MODEL FILES  (where each table is defined as a C# class)
+================================================================================
+
+User               APIPSI16/Models/User.cs
+Company            APIPSI16/Models/Company.cs
+CompanyMember      APIPSI16/Models/CompanyMember.cs
+Opportunity        APIPSI16/Models/Opportunity.cs
+JobApplication     APIPSI16/Models/JobApplication.cs
+InterviewRound     APIPSI16/Models/InterviewRound.cs
+Session            APIPSI16/Models/Session.cs
+Connection         APIPSI16/Models/Connection.cs
+Notification       APIPSI16/Models/Notification.cs
+Chat               APIPSI16/Models/Chat.cs
+ChatUser           APIPSI16/Models/ChatUser.cs
+ChatMessage        APIPSI16/Models/ChatMessage.cs
+Post               APIPSI16/Models/Post.cs
+ProfileEducation   APIPSI16/Models/ProfileEducation.cs
+ProfileExperience  APIPSI16/Models/ProfileExperience.cs
+Skill / UserSkill  APIPSI16/Models/Skill.cs, UserSkill.cs
+JobRole            APIPSI16/Models/JobRole.cs
+Location / Country APIPSI16/Models/Location.cs, Country.cs
+EmployerCandidateHistory  APIPSI16/Models/EmployerCandidateHistory.cs
+
+================================================================================
+27. VIEW FILES  (what the user actually sees)
+================================================================================
+
+Login page            XcelerateLinks/Views/Account/Login.cshtml
+Register page         XcelerateLinks/Views/Account/Register.cshtml
+Forgot/Reset password XcelerateLinks/Views/Account/ForgotPassword.cshtml
+                      XcelerateLinks/Views/Account/ResetPassword.cshtml
+
+Home (user dashboard) XcelerateLinks/Views/Home/Index.cshtml
+Admin dashboard       XcelerateLinks/Views/Home/AdminIndex.cshtml
+Revenue / profit      XcelerateLinks/Views/Home/Profit.cshtml
+
+Opportunities list    XcelerateLinks/Views/Opportunities/UserIndex.cshtml (user)
+                      XcelerateLinks/Views/Opportunities/Index.cshtml     (admin)
+Opportunity detail    XcelerateLinks/Views/Opportunities/Details.cshtml
+Create opportunity    XcelerateLinks/Views/Opportunities/Create.cshtml
+
+Apply form            XcelerateLinks/Views/Applications/Create.cshtml
+My applications       XcelerateLinks/Views/Applications/UserIndex.cshtml
+Application pipeline  XcelerateLinks/Views/Applications/Pipeline.cshtml
+Application detail    XcelerateLinks/Views/Applications/Details.cshtml
+
+Connections page      XcelerateLinks/Views/Connections/Index.cshtml
+User profile          XcelerateLinks/Views/Users/Details.cshtml
+Edit profile          XcelerateLinks/Views/Users/Edit.cshtml
+Network / discover    XcelerateLinks/Views/Users/Network.cshtml
+
+Chat list             XcelerateLinks/Views/Chats/Index.cshtml
+Chat messages         XcelerateLinks/Views/Chats/Messages.cshtml
+Chat widget (sidebar) XcelerateLinks/Views/Shared/_ChatWidget.cshtml
+
+Company list          XcelerateLinks/Views/Companies/Index.cshtml (admin)
+                      XcelerateLinks/Views/Companies/UserIndex.cshtml
+Company profile       XcelerateLinks/Views/Companies/Details.cshtml
+Manage company        XcelerateLinks/Views/Companies/Manage.cshtml
+
+Subscriptions         XcelerateLinks/Views/Subscriptions/Index.cshtml
+
+Employer contacts     XcelerateLinks/Views/EmployerContacts/Index.cshtml
+Employer contact trash XcelerateLinks/Views/EmployerContacts/Trash.cshtml
+
+Shared layout         XcelerateLinks/Views/Shared/_Layout.cshtml
+User menu partial     XcelerateLinks/Views/Shared/_UserMenu.cshtml
+
+================================================================================
+END OF CODE MAP
+================================================================================

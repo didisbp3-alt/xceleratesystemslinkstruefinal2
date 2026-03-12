@@ -1,0 +1,217 @@
+================================================================================
+PITCH_SCRIPT.txt — "XcelerateLinks: 3-to-5 Minute Normal User Walkthrough"
+================================================================================
+
+HOW TO USE THIS SCRIPT
+  Read the lines in CAPS out loud while clicking through the site.
+  Lines in [brackets] are your stage directions / click instructions.
+  Estimated time is marked at key checkpoints.
+  The whole script runs 3:30–4:30 depending on your speaking pace.
+  Speak clearly, don't rush — the demo should feel natural, not recited.
+
+================================================================================
+[START — you're on the HOME page, not logged in]
+[Timer: 0:00]
+================================================================================
+
+  "So, this is XcelerateLinks — a professional networking and job-application
+   platform I built from scratch.  Think of it as a LinkedIn-style system,
+   but fully coded by me in ASP.NET Core.
+
+   There are two sides to the system:  a REST API that handles all the data
+   and business logic, and an MVC web front-end that's what you're looking at
+   now.  They're two separate projects that talk to each other.
+
+   Let me show you what a normal user experiences from the moment they land
+   on the site."
+
+================================================================================
+[STEP 1 — REGISTER]
+[Click: Register button / nav link]
+[Timer: ~0:25]
+================================================================================
+
+  "First, a new user signs up.  I'll fill in a name, email, and password."
+
+  [Fill the registration form — use a test account you already have set up
+   OR just describe the fields while the form is visible]
+
+  "The password is hashed server-side with ASP.NET's PasswordHasher before
+   it ever touches the database — so plain-text passwords are never stored.
+   After registering, the user is redirected to log in."
+
+================================================================================
+[STEP 2 — LOGIN]
+[Click: Login, enter credentials]
+[Timer: ~0:55]
+================================================================================
+
+  "When you log in, the API checks your credentials, generates a JWT —
+   a JSON Web Token — and sends it back.  The MVC front-end stores that
+   token in a secure, HttpOnly cookie, which means JavaScript on the page
+   can never steal it.  From this point on, every API call automatically
+   carries that token.
+
+   You're now logged in as a regular jobseeker."
+
+  [You are now on the user dashboard / home page]
+
+================================================================================
+[STEP 3 — BROWSE OPPORTUNITIES]
+[Click: Opportunities (or Jobs) in the navigation]
+[Timer: ~1:20]
+================================================================================
+
+  "Here's the opportunities page.  What makes this interesting is that every
+   job listing you see has a match score — a percentage calculated in real
+   time based on your job-role preferences and your location compared to what
+   the employer is looking for.
+
+   The score formula uses an F1-style calculation — it balances how many of
+   your preferred roles overlap with the job's required roles, and adds a
+   location score on top.  Jobs are sorted from highest match to lowest, so
+   the most relevant ones always float to the top."
+
+  [Optionally hover over or click a job to show the match score badge]
+
+  "I can also filter by employment type, remote option, or location —
+   the filters update the list immediately."
+
+================================================================================
+[STEP 4 — APPLY FOR A JOB]
+[Click: Apply on a job listing]
+[Timer: ~1:55]
+================================================================================
+
+  "Let's apply for this one.  The form pre-fills with data from my profile
+   — name, phone number — and I can add a cover letter and portfolio link.
+
+   A few things happen in the background when I submit this:
+   First, the API checks I haven't already applied for this exact job.
+   Second, if I'm on the free plan, it counts how many applications I've
+   submitted this month — free users are capped at five per month.  If I'm
+   over the limit, the API returns a 429 response and the site shows an
+   appropriate message instead of applying."
+
+  [Submit the form]
+
+  "Application submitted.  The employer gets a notification automatically."
+
+================================================================================
+[STEP 5 — CONNECTIONS]
+[Click: Network or Users in the navigation]
+[Timer: ~2:30]
+================================================================================
+
+  "Now let's look at the networking side.  Here's the user discovery page
+   where I can find other professionals.
+
+   I'll send a connection request to another user."
+
+  [Click Connect on a user card]
+
+  "A connection request is created, and the other user gets a notification.
+   When they accept, we're connected.  The system prevents duplicate requests
+   in both directions — there's actually a unique database index enforcing
+   that, not just a code check.
+
+   Free-plan users are limited to 50 connections.  Pro and Enterprise users
+   have no limit."
+
+================================================================================
+[STEP 6 — REAL-TIME CHAT]
+[Click: Chat or Messages in the navigation]
+[Timer: ~3:00]
+================================================================================
+
+  "Now for real-time messaging.  This uses SignalR — which is ASP.NET's
+   WebSocket framework.  When you open a chat, your browser connects to a
+   SignalR Hub on the server.
+
+   I can start a direct conversation with someone from my connections."
+
+  [Click to open or create a chat, send a short message]
+
+  "That message was sent over a live WebSocket connection — no page reload.
+   The hub saves the message to the database and broadcasts it to everyone
+   in the chat group instantly.  There's also a typing indicator — when you
+   start typing, it notifies the other person in real time — and messages
+   are marked as read automatically when you see them."
+
+================================================================================
+[STEP 7 — NOTIFICATIONS]
+[Click: the notification bell or notification area]
+[Timer: ~3:35]
+================================================================================
+
+  "Every significant event — a connection request, a job application update,
+   a perfect job match, an interview being scheduled — triggers a notification
+   that appears here.  Notifications can be marked as read individually, and
+   the unread count updates in the nav bar."
+
+================================================================================
+[STEP 8 — MY PROFILE]
+[Click: Profile / your name in the nav]
+[Timer: ~3:55]
+================================================================================
+
+  "Finally, here's the user profile.  Users can add their education history,
+   work experience, and skills.  Other users can endorse your skills.
+   There's a profile picture upload — it gets saved with a random GUID
+   filename to prevent any directory traversal attacks, and the server
+   enforces a 5-megabyte limit and image-only file types.
+
+   The profile also shows an 'Open to Work' badge that the user can toggle
+   on or off — and that badge feeds directly into the employer's candidate
+   matching board."
+
+================================================================================
+[CLOSING — ~4:10 to 4:30]
+================================================================================
+
+  "So in under five minutes, we've gone from registering a brand new account
+   all the way through browsing personalised job recommendations, applying
+   with rate-limiting built in, connecting with other professionals, chatting
+   in real time, receiving notifications, and managing a full public profile.
+
+   The whole thing is secured with JWT authentication, HttpOnly cookies,
+   anti-forgery tokens on every form, and password hashing — all built
+   without any third-party auth library.
+
+   That's XcelerateLinks."
+
+================================================================================
+QUICK RECOVERY LINES  (if something breaks or freezes during the demo)
+================================================================================
+
+  If a page is slow to load:
+    "The API and MVC are running locally, so there's sometimes a cold-start
+     delay — in a real deployment they'd be on separate hosted services."
+
+  If login fails:
+    "Let me just use the debug endpoint — the API has a /auth/login-debug-token
+     endpoint I added specifically so I can demonstrate without needing a
+     live database populated."
+
+  If a feature isn't visible because you're on the wrong account:
+    "To show this properly I need to be logged in as an employer / admin —
+     let me switch accounts quickly."  [Switch to your employer test account]
+
+  If teacher asks "how does X work?":
+    → Open CODE_MAP.txt and go to the matching numbered section.
+    → Every method shown here has a FILE + CLASS + METHOD + LINE entry there.
+
+================================================================================
+CHEAT SHEET — which account to use for which step
+================================================================================
+
+  STEP 1-8  (jobseeker demo):  your regular test USER account (Role = 1)
+  Employer pipeline demo:      an EMPLOYER account (Role = 2)
+  Admin dashboard demo:        the ADMIN account (Role = 0)
+
+  Tip: have all three accounts already logged into different browser profiles
+  or incognito windows before you start presenting.
+
+================================================================================
+END OF PITCH SCRIPT
+================================================================================
